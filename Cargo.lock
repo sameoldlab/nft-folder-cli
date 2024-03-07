@@ -1736,8 +1736,8 @@ checksum = "e4a24736216ec316047a1fc4252e27dabb04218aa4a3f37c6e7ddbf1f9782b54"
 name = "nft-folder-linux"
 version = "0.1.0"
 dependencies = [
+ "base64 0.13.1",
  "ethers",
- "eyre",
  "reqwest",
  "serde",
  "serde_json",
