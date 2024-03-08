@@ -27,7 +27,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let ens_name = &args[1];
-  
     let provider = Provider::<Http>::try_from(RPC_URL)?;
     let address = resolve_ens_name(ens_name, &provider).await?;
 
@@ -36,27 +35,44 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let client = Client::new();
     let nodes = &response_json.data.tokens.nodes;
     println!("Found {} NFTs. Starting download...", nodes.len());
-	
+
     // Create the directory based on the ENS name
     let ens_dir = format!("./test/{}", ens_name);
     create_directory_if_not_exists(&ens_dir).await?;
 
-		// Save NFT images
+    // Save NFT images
     for node in nodes {
         let img_url: &String = &node.token.image.url;
         let name: &String = &node.token.name;
-				
-				println!("Downloading {name}");
-				if img_url.starts_with("data:image/svg") {
-					let file_path = format!("{}/{}.svg", &ens_dir, name);
-					save_base64_image( &img_url.strip_prefix("data:image/svg+xml;base64,").unwrap_or(&img_url), &file_path)?;
-				} else {
-					let file_path = format!("{}/{}.svg", &ens_dir, name);
-					download_image(&client, &img_url, &file_path).await?;
-				}
+
+        if img_url.starts_with("data:image/svg") {
+            let file_path = format!("{}/{}.svg", &ens_dir, name);
+            if file_exists(&file_path).await? {
+                println!("Skipping {name}");
+            } else {
+
+							println!("Downloading {name}");
+							save_base64_image(
+								&img_url
+								.strip_prefix("data:image/svg+xml;base64,")
+							.unwrap_or(&img_url),
+							&file_path,
+            )?;
+					}
+        } else {
+            let file_path = format!("{}/{}.png", &ens_dir, name);
+            if file_exists(&file_path).await? {
+                println!("Skipping {name}");
+                // break;
+            } else {
+
+							println!("Downloading {name}");
+							download_image(&client, &img_url, &file_path).await?;
+						}
+        }
         println!("{name} saved succesfully")
     }
-    println!("{:#?}", response_json);
+    // println!("{:#?}", response_json);
     Ok(())
 }
 // async fn get_address()
@@ -162,30 +178,33 @@ async fn download_image(
 }
 
 async fn create_directory_if_not_exists(dir_path: &str) -> Result<(), Box<dyn Error>> {
-  match fs::metadata(dir_path).await {
-		Ok(metadata) => {
-				if metadata.is_dir() {
-						println!("{dir_path} exists!");
-				} else {
-						return Err(Box::new(io::Error::new(
-								ErrorKind::InvalidInput,
-								format!("{dir_path} is not a directory"),
-						)));
-				}
-		}
-		Err(e) if e.kind() == ErrorKind::NotFound => {
-				fs::create_dir_all(dir_path).await?;
-				println!("created directory: {dir_path}");
-		}
-		Err(e) => {
-				return Err(Box::new(e));
-		}
-}
+    match fs::metadata(dir_path).await {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                return Err(Box::new(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("{dir_path} is not a directory"),
+                )));
+            }
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            fs::create_dir_all(dir_path).await?;
+            println!("created directory: {dir_path}");
+        }
+        Err(e) => {
+            return Err(Box::new(e));
+        }
+    }
     Ok(())
 }
 
-fn save_base64_image(base64_data: &str, file_path: &str) -> Result<(), Box<dyn Error>> {
+async fn file_exists(file_path: &str) -> Result<bool, Box<dyn Error>> {
+    Ok(fs::metadata(file_path)
+        .await
+        .map_or(false, |metadata| metadata.is_file()))
+}
 
+fn save_base64_image(base64_data: &str, file_path: &str) -> Result<(), Box<dyn Error>> {
     let decoded_data = decode(base64_data)?;
     let mut file = File::create(file_path)?;
     file.write_all(&decoded_data)?;
