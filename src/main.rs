@@ -42,35 +42,41 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Save NFT images
     for node in nodes {
-        let img_url: &String = &node.token.image.url;
+        let image = &node.token.image;
         let name: &String = &node.token.name;
 
-        if img_url.starts_with("data:image/svg") {
-            let file_path = format!("{}/{}.svg", &ens_dir, name);
+        let img_url = match image {
+            serde_json::Value::String(url) => Some(url.as_str()),
+            serde_json::Value::Object(obj) => obj.get("url").and_then(serde_json::Value::as_str),
+            _ => None,
+        };
+        if let Some(url) = img_url {
+            let extension = if url.starts_with("data:image/svg") {
+                "svg".to_string()
+            } else {
+                url.rsplit('.').next().unwrap_or_default().to_lowercase()
+            };
+            let file_path = format!("{}/{}.{}", &ens_dir, name, &extension);
+
             if file_exists(&file_path).await? {
                 println!("Skipping {name}");
             } else {
+                println!("Downloading {name}");
+                if extension == "svg" {
+                    save_base64_image(
+                        &url.strip_prefix("data:image/svg+xml;base64,")
+                            .unwrap_or(&url),
+                        &file_path,
+                    )?;
+                } else {
+                    download_image(&client, &url, &file_path).await?;
+                }
 
-							println!("Downloading {name}");
-							save_base64_image(
-								&img_url
-								.strip_prefix("data:image/svg+xml;base64,")
-							.unwrap_or(&img_url),
-							&file_path,
-            )?;
-					}
+                println!("{name} saved successfully");
+            }
         } else {
-            let file_path = format!("{}/{}.png", &ens_dir, name);
-            if file_exists(&file_path).await? {
-                println!("Skipping {name}");
-                // break;
-            } else {
-
-							println!("Downloading {name}");
-							download_image(&client, &img_url, &file_path).await?;
-						}
+            println!("No image URL for {}", name);
         }
-        println!("{name} saved succesfully")
     }
     // println!("{:#?}", response_json);
     Ok(())
@@ -84,10 +90,6 @@ async fn resolve_ens_name(
     Ok(format!("0x{}", hex::encode(address)))
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct NftUrl {
-    url: String,
-}
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 
