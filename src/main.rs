@@ -92,12 +92,11 @@ struct NftUrl {
 #[serde(rename_all = "camelCase")]
 
 struct NftToken {
-    image: NftUrl,
-
+    image: serde_json::Value,
     name: String,
     collection_address: String,
     token_id: String,
-    // Include other fields as needed
+    metadata: serde_json::Value,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -122,7 +121,7 @@ async fn request_nft_collection(address: &str) -> Result<NftResponse, Box<dyn Er
         r#"
 		query NFTsForAddress {{
 			tokens(networks: [{{network: ETHEREUM, chain: MAINNET}}],
-						pagination: {{limit: 1}},
+						pagination: {{limit: 8}},
 						where: {{ownerAddresses: "{}"}}) {{
 				nodes {{
 					token {{
@@ -147,19 +146,27 @@ async fn request_nft_collection(address: &str) -> Result<NftResponse, Box<dyn Er
                     "variables": null,
     }))?;
 
-    let response: NftResponse = Client::new()
+    let response = Client::new()
         .post("https://api.zora.co/graphql")
         .json(&request_body)
         .send()
-        .await?
-        .error_for_status()?
-        .json::<NftResponse>()
         .await?;
+    let mut response_body = response.bytes_stream();
+
+    let mut response_data = Vec::new();
+    while let Some(item) = response_body.next().await {
+        let chunk = item?;
+        response_data.extend_from_slice(&chunk);
+    }
+
+    let response_str = String::from_utf8(response_data)?;
+    // println!("{}", &response_str);
+
+    let response: NftResponse = serde_json::from_str(&response_str)?;
+    println!("{:#?}", &response.data.tokens.nodes);
 
     Ok(response)
 }
-
-// use tokio::fs::File;
 
 async fn download_image(
     client: &Client,
