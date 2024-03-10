@@ -4,6 +4,7 @@ use ethers::{
     providers::{Middleware, Provider},
     utils::hex,
 };
+use eyre::{eyre, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
@@ -29,10 +30,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let ens_name = &args[1];
     let provider = Provider::<Http>::try_from(RPC_URL)?;
     let address = resolve_ens_name(ens_name, &provider).await?;
+    println!("Resolved address {}", address);
 
     let response_json = request_nft_collection(&address).await?;
 
-    let client = Client::new();
     let nodes = &response_json.data.tokens.nodes;
     println!("Found {} NFTs. Starting download...", nodes.len());
 
@@ -40,10 +41,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let ens_dir = format!("./test/{}", ens_name);
     create_directory_if_not_exists(&ens_dir).await?;
 
+    let client = Client::new();
     // Save NFT images
     for node in nodes {
         let image = &node.token.image;
-        let name: &String = &node.token.name;
 
         let img_url = match image {
             serde_json::Value::String(url) => Some(url.as_str()),
@@ -78,16 +79,29 @@ async fn resolve_ens_name(
     let address = provider.resolve_name(ens_name).await?;
     Ok(format!("0x{}", hex::encode(address)))
 }
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+#[serde(rename_all = "camelCase")]
+enum NftImage {
+    Null,
+    Url(String),
+    Object {
+        url: String,
+        size: Option<serde_json::Value>,
+        mime_type: Option<String>,
+    },
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 
 struct NftToken {
-    image: serde_json::Value,
-    name: String,
-    collection_address: String,
-    token_id: String,
-    metadata: serde_json::Value,
+    image: NftImage,
+    name: Option<String>,
+    collection_name: String,
+    token_url: Option<String>,
+    token_id: Option<String>,
+    metadata: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -116,12 +130,14 @@ async fn request_nft_collection(address: &str) -> Result<NftResponse, Box<dyn Er
 						where: {{ownerAddresses: "{}"}}) {{
 				nodes {{
 					token {{
-						collectionAddress
 						tokenId
+						tokenUrl
+						collectionName
 						name
-						owner
 						image {{
 							url
+							size
+							mimeType
 						}}
 						metadata
 					}}
@@ -141,19 +157,22 @@ async fn request_nft_collection(address: &str) -> Result<NftResponse, Box<dyn Er
         .post("https://api.zora.co/graphql")
         .json(&request_body)
         .send()
-        .await?;
+        .await
+        .map_err(|err| eyre!("Failed to send request: {}", err))?;
     let mut response_body = response.bytes_stream();
 
     let mut response_data = Vec::new();
     while let Some(item) = response_body.next().await {
-        let chunk = item?;
+        let chunk = item.map_err(|err| eyre!("Failed to read response: {}", err))?;
         response_data.extend_from_slice(&chunk);
     }
 
-    let response_str = String::from_utf8(response_data)?;
-    // println!("{}", &response_str);
+    let response_str = String::from_utf8(response_data)
+        .map_err(|err| eyre!("Failed to convert response to string: {}", err))?;
+    println!("{}", &response_str);
 
-    let response: NftResponse = serde_json::from_str(&response_str)?;
+    let response: NftResponse = serde_json::from_str(&response_str)
+        .map_err(|err| eyre!("Failed to parse JSON response: {}", err))?;
     println!("{:#?}", &response.data.tokens.nodes);
 
     Ok(response)
