@@ -19,7 +19,7 @@ use tokio::fs;
 const RPC_URL: &str = "https://eth.llamarpc.com";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     //
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -72,10 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 // async fn get_address()
-async fn resolve_ens_name(
-    ens_name: &str,
-    provider: &Provider<Http>,
-) -> Result<String, Box<dyn Error>> {
+async fn resolve_ens_name(ens_name: &str, provider: &Provider<Http>) -> Result<String> {
     let address = provider.resolve_name(ens_name).await?;
     Ok(format!("0x{}", hex::encode(address)))
 }
@@ -121,7 +118,7 @@ struct NftResponse {
     data: NftData,
 }
 
-async fn request_nft_collection(address: &str) -> Result<NftResponse, Box<dyn Error>> {
+async fn request_nft_collection(address: &str) -> Result<NftResponse> {
     let query = format!(
         r#"
 		query NFTsForAddress {{
@@ -178,11 +175,7 @@ async fn request_nft_collection(address: &str) -> Result<NftResponse, Box<dyn Er
     Ok(response)
 }
 
-async fn download_image(
-    client: &Client,
-    image_url: &str,
-    file_path: &str,
-) -> Result<(), Box<dyn Error>> {
+async fn download_image(client: &Client, image_url: &str, file_path: &str) -> Result<()> {
     let response = client.get(image_url).send().await?;
     let bytes = response /* .error_for_status()? */
         .bytes()
@@ -198,10 +191,11 @@ async fn create_directory_if_not_exists(dir_path: &str) -> Result<(), Box<dyn Er
     match fs::metadata(dir_path).await {
         Ok(metadata) => {
             if !metadata.is_dir() {
-                return Err(Box::new(io::Error::new(
+                return Err(io::Error::new(
                     ErrorKind::InvalidInput,
                     format!("{dir_path} is not a directory"),
-                )));
+                )
+                .into());
             }
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {
@@ -209,7 +203,7 @@ async fn create_directory_if_not_exists(dir_path: &str) -> Result<(), Box<dyn Er
             println!("created directory: {dir_path}");
         }
         Err(e) => {
-            return Err(Box::new(e));
+            return Err(e.into());
         }
     }
     Ok(())
@@ -221,7 +215,7 @@ async fn file_exists(file_path: &str) -> bool {
         .map_or(false, |metadata| metadata.is_file())
 }
 
-fn save_base64_image(base64_data: &str, file_path: &str) -> Result<(), Box<dyn Error>> {
+fn save_base64_image(base64_data: &str, file_name: &str) -> Result<()> {
     let decoded_data = decode(base64_data)?;
     let mut file = File::create(file_path)?;
     file.write_all(&decoded_data)?;
