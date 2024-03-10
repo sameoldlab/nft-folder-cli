@@ -1,5 +1,5 @@
 [package]
-name = "nft-folder-linux"
+name = "nft-folder"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,9 +10,11 @@ ethers = { version = "2.0", features = ["rustls"] }
 
 # Ethers' async features rely upon the Tokio async runtime.
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs"] }
+
 # Flexible concrete Error Reporting type built on std::error::Error with customizable Reports
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 reqwest = { version = "0.11", features = ["json", "blocking", "stream"] }
 base64 = "0.13.0"
+eyre = "0.6.12"

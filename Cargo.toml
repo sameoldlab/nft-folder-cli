@@ -1,0 +1,1 @@
+workspace = { members = [ "nemo-plugin", "nft-folder"], resolver = "2" }
