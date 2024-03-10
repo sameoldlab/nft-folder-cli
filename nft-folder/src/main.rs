@@ -58,19 +58,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             };
             let file_path = format!("{}/{}.{}", &ens_dir, name, &extension);
 
-            if file_exists(&file_path).await? {
-                println!("Skipping {name}");
-            } else {
-                println!("Downloading {name}");
-                if extension == "svg" {
-                    save_base64_image(
-                        &url.strip_prefix("data:image/svg+xml;base64,")
-                            .unwrap_or(&url),
-                        &file_path,
-                    )?;
-                } else {
-                    download_image(&client, &url, &file_path).await?;
-                }
+                    // file_exists(&file_path).try_into()
+                    if file_exists(&file_path).await {
 
                 println!("{name} saved successfully");
             }
@@ -207,10 +196,10 @@ async fn create_directory_if_not_exists(dir_path: &str) -> Result<(), Box<dyn Er
     Ok(())
 }
 
-async fn file_exists(file_path: &str) -> Result<bool, Box<dyn Error>> {
-    Ok(fs::metadata(file_path)
+async fn file_exists(file_path: &str) -> bool {
+    fs::metadata(file_path)
         .await
-        .map_or(false, |metadata| metadata.is_file()))
+        .map_or(false, |metadata| metadata.is_file())
 }
 
 fn save_base64_image(base64_data: &str, file_path: &str) -> Result<(), Box<dyn Error>> {
