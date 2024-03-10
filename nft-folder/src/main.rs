@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::to_value;
 use std::{
     env,
-    error::Error,
     fs::File,
     io::{self, ErrorKind, Write},
 };
@@ -34,7 +33,7 @@ async fn main() -> Result<()> {
 
     let response_json = request_nft_collection(&address).await?;
 
-    let nodes = &response_json.data.tokens.nodes;
+    let nodes = response_json.data.tokens.nodes;
     println!("Found {} NFTs. Starting download...", nodes.len());
 
     // Create the directory based on the ENS name
@@ -44,31 +43,75 @@ async fn main() -> Result<()> {
     let client = Client::new();
     // Save NFT images
     for node in nodes {
-        let image = &node.token.image;
+        handle_download(node, &ens_dir, &client).await?;
+    }
 
-        let img_url = match image {
-            serde_json::Value::String(url) => Some(url.as_str()),
-            serde_json::Value::Object(obj) => obj.get("url").and_then(serde_json::Value::as_str),
-            _ => None,
-        };
-        if let Some(url) = img_url {
-            let extension = if url.starts_with("data:image/svg") {
-                "svg".to_string()
-            } else {
-                url.rsplit('.').next().unwrap_or_default().to_lowercase()
-            };
-            let file_path = format!("{}/{}.{}", &ens_dir, name, &extension);
+    // println!("{:#?}", response_json);
+    Ok(())
+}
 
-                    // file_exists(&file_path).try_into()
-                    if file_exists(&file_path).await {
+async fn handle_download(node: NftNode, ens_dir: &str, client: &Client) -> Result<()> {
+    let image = node.token.image;
 
-                println!("{name} saved successfully");
+    let name = match node.token.name {
+        Some(name) => name,
+        None => return Err(eyre!("Image data not found")),
+    };
+
+    let (url, mime) = match image {
+        NftImage::Object {
+            url,
+            mime_type,
+            size: _,
+        } => (url, mime_type),
+        NftImage::Url(url) => (url, None),
+        _ => return Err(eyre!("No image URL found for {name}")),
+    };
+
+    let extension = if url.starts_with("data:image/svg") {
+        "svg".to_string()
+    } else if let Some(mime) = mime {
+        mime.rsplit("/").next().unwrap_or_default().to_string()
+    } else {
+        url.rsplit('.').next().unwrap_or_default().to_lowercase()
+    };
+
+    let file_path = format!("{ens_dir}/{name}.{extension}");
+
+    /* Need to check if the file exist, but don't reliably know the file extension till download_image_auto */
+    if file_exists(&file_path).await {
+        println!("Skipping {name}");
+        return Ok(());
+    }
+
+    println!("Downloading {name} to {file_path}");
+
+    match url {
+        // Decode and save svg
+        url if url.starts_with("data:image/svg") => save_base64_image(
+            &url.strip_prefix("data:image/svg+xml;base64,")
+                .unwrap_or(&url),
+            &file_path,
+        )?,
+        // append IPFS gateway
+        url if url.starts_with("ipfs") => {
+            let parts: Vec<&str> = url.split('/').collect();
+            if let Some(hash) = parts.iter().find(|&&part| part.starts_with("Qm")) {
+                let ipfs_url = format!("https://ipfs.io/ipfs/{hash}");
+                if let Err(error) = download_image(&client, &ipfs_url, &file_path).await {
+                    return Err(eyre::eyre!("Error downloading image {}: {}", name, error));
+                }
             }
-        } else {
-            println!("No image URL for {}", name);
+        }
+        url => {
+            if let Err(error) = download_image(&client, &url, &file_path).await {
+                return Err(eyre::eyre!("Error downloading image {}: {}", name, error));
+            };
         }
     }
-    // println!("{:#?}", response_json);
+
+    println!("{name} saved successfully");
+
     Ok(())
 }
 // async fn get_address()
@@ -187,7 +230,8 @@ async fn download_image(client: &Client, image_url: &str, file_path: &str) -> Re
     Ok(())
 }
 
-async fn create_directory_if_not_exists(dir_path: &str) -> Result<(), Box<dyn Error>> {
+
+async fn create_directory_if_not_exists(dir_path: &str) -> Result<()> {
     match fs::metadata(dir_path).await {
         Ok(metadata) => {
             if !metadata.is_dir() {
@@ -215,7 +259,7 @@ async fn file_exists(file_path: &str) -> bool {
         .map_or(false, |metadata| metadata.is_file())
 }
 
-fn save_base64_image(base64_data: &str, file_name: &str) -> Result<()> {
+fn save_base64_image(base64_data: &str, file_path: &str) -> Result<()> {
     let decoded_data = decode(base64_data)?;
     let mut file = File::create(file_path)?;
     file.write_all(&decoded_data)?;
