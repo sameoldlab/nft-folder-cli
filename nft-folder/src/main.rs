@@ -5,6 +5,7 @@ use ethers::{
     utils::hex,
 };
 use eyre::{eyre, Result};
+use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
@@ -41,21 +42,33 @@ async fn main() -> Result<()> {
     create_directory_if_not_exists(&ens_dir).await?;
 
     let client = Client::new();
-    // Save NFT images
-    for node in nodes {
-        handle_download(node, &ens_dir, &client).await?;
-    }
+    let max_concurrent_downloads = 5;
 
-    // println!("{:#?}", response_json);
+    // Save NFT images
+    let download_tasks = stream::iter(nodes.into_iter().map(|node| {
+        let ens_dir = ens_dir.clone();
+        let client = client.clone();
+        async move { handle_download(node, &ens_dir, &client).await }
+    }))
+    .buffer_unordered(max_concurrent_downloads)
+    .collect::<Vec<_>>();
+
+    let results = download_tasks.await;
+
+    for result in results {
+        if let Err(err) = result {
+            return Err(err);
+        }
+    }
     Ok(())
 }
 
 async fn handle_download(node: NftNode, ens_dir: &str, client: &Client) -> Result<()> {
-    let image = node.token.image;
+    let image = &node.token.image;
 
-    let name = match node.token.name {
+    let name = match &node.token.name {
         Some(name) => name,
-        None => return Err(eyre!("Image data not found")),
+        None => return Err(eyre!("Image data not found for {:#?}", node)),
     };
 
     let (url, mime) = match image {
@@ -64,7 +77,7 @@ async fn handle_download(node: NftNode, ens_dir: &str, client: &Client) -> Resul
             mime_type,
             size: _,
         } => (url, mime_type),
-        NftImage::Url(url) => (url, None),
+        NftImage::Url(url) => (url, &None), //meant here
         _ => return Err(eyre!("No image URL found for {name}")),
     };
 
