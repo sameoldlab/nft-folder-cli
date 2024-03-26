@@ -4,6 +4,7 @@ use ethers::{
 };
 use eyre::Result;
 use futures::stream::{self, StreamExt};
+use nft_folder::{self, create_directory, handle_download, resolve_ens_name, NftResponse};
 use reqwest::Client;
 use std::env;
 use nft_folder::{
@@ -36,8 +37,7 @@ async fn main() -> Result<()> {
     println!("Found {} NFTs. Starting download...", nodes.len());
 
     // Create the directory based on the ENS name
-    let ens_dir = format!("./test/{}", ens_name);
-    create_directory_if_not_exists(&ens_dir).await? ;
+    create_directory(&ens_dir).await?;
 
     let client = Client::new();
     let max_concurrent_downloads = 5;

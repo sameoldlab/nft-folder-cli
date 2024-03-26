@@ -235,7 +235,7 @@ async fn _download_image_auto(client: &Client, image_url: &str, file_dir: &str) 
     Ok(file_path)
 }
 
-pub async fn create_directory_if_not_exists(dir_path: &str) -> Result<()> {
+pub async fn create_directory(dir_path: &str) -> Result<()> {
     match fs::metadata(dir_path).await {
         Ok(metadata) => {
             if !metadata.is_dir() {
