@@ -14,7 +14,7 @@ use std::{
 };
 use tokio::fs;
 
-pub async fn handle_download(node: NftNode, ens_dir: &str, client: &Client) -> Result<()> {
+const DEBUG: bool = false;
     let image = &node.token.image;
 
     let name = match &node.token.name {
@@ -44,11 +44,15 @@ pub async fn handle_download(node: NftNode, ens_dir: &str, client: &Client) -> R
 
     /* Need to check if the file exist, but don't reliably know the file extension till download_image_auto */
     if file_exists(&file_path).await {
-        println!("Skipping {name}");
+        if DEBUG {
+            println!("Skipping {name}");
+        }
         return Ok(());
     }
 
-    println!("Downloading {name} to {file_path}");
+    if DEBUG {
+        println!("Downloading {name} to {file_path}");
+    }
 
     match url {
         // Decode and save svg
@@ -74,7 +78,9 @@ pub async fn handle_download(node: NftNode, ens_dir: &str, client: &Client) -> R
         }
     }
 
-    println!("{name} saved successfully");
+    if DEBUG {
+        println!("{name} saved successfully");
+    }
 
     Ok(())
 }
@@ -175,11 +181,14 @@ impl NftResponse {
 
         let response_str = String::from_utf8(response_data)
             .map_err(|err| eyre!("Failed to convert response to string: {}", err))?;
-        println!("{}", &response_str);
-
+        if DEBUG {
+            println!("{}", &response_str);
+        }
         let response: NftResponse = serde_json::from_str(&response_str)
             .map_err(|err| eyre!("Failed to parse JSON response: {}", err))?;
-        println!("{:#?}", &response.data.tokens.nodes);
+        if DEBUG {
+            println!("{:#?}", &response.data.tokens.nodes);
+        }
 
         Ok(response)
     }
