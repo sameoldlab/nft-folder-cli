@@ -73,15 +73,14 @@ async fn main() -> Result<()> {
     );
 
     // Save NFT images
-    let download_tasks = stream::iter(nodes.into_iter().map(|node| {
+    let results: Vec<Result<()>> = stream::iter(nodes.into_iter().progress().map(|node| {
         let ens_dir = ens_dir.clone();
         let client = client.clone();
         async move { handle_download(node, &ens_dir, &client).await }
     }))
     .buffer_unordered(max_concurrent_downloads)
-    .collect::<Vec<_>>();
-
-    let results = download_tasks.await;
+    .collect()
+    .await;
 
     for result in results {
         match result {
