@@ -5,7 +5,7 @@ use ethers::utils::hex::encode;
 use ethers_providers::{Http, Middleware, Provider};
 use eyre::Result;
 use futures::stream::{self, StreamExt};
-use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use nft_folder::{self, create_directory, handle_download, NftResponse};
 use reqwest::Client;
 use std::env;
@@ -34,15 +34,15 @@ struct Account {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let multi_pb = MultiProgress::new();
     let provider = Provider::<Http>::try_from(RPC_URL)?;
 
     let account = match &args.address {
         arg if arg.split(".").last().unwrap() == "eth" => {
-            let spinner = ProgressBar::new_spinner();
-            spinner.set_message("Resolving address...");
-            spinner.enable_steady_tick(time::Duration::from_millis(100));
+            // format!("{spinner} {} {msg}", style("INFO").bright());
+            let spinner = pending(&multi_pb, "Resolving address...".to_string());
             let address = resolve_ens_name(&arg, &provider).await?;
-            spinner.set_message(format!("Resolved to {}", address));
+            spinner.set_message(format!("Resolving address: {}", address));
             spinner.finish();
 
             Account {
@@ -56,14 +56,20 @@ async fn main() -> Result<()> {
         },
         _ => {
             return Err(eyre::eyre!(
-                "Invalid address. Supported formats are 0xabc12... or name.eth"
+                "{} Supported formats are 0xabc12... or name.eth",
+                style("Invalid address").red()
             ))
         }
     };
+    // Request
+    let spinner = pending(&multi_pb, "Requesting collection data...".to_string());
+    let nodes = NftResponse::request(&account.address)
+        .await?
+        .data
+        .tokens
+        .nodes;
+    spinner.finish();
 
-    let response_json = NftResponse::request(&account.address).await?;
-
-    let nodes = response_json.data.tokens.nodes;
     println!("Found {} NFTs. Starting download...", nodes.len());
 
     let path = match std::fs::read_to_string(args.path) {
@@ -75,35 +81,36 @@ async fn main() -> Result<()> {
         Some(name) => format!("{path}/{}", name),
         None => format!("{path}/{}", account.address),
     };
-
     create_directory(&ens_dir).await?;
 
     let client = Client::new();
-    let max_concurrent_downloads = 5;
-
-    let pb = ProgressBar::new(nodes.len() as u64).with_style(
-        ProgressStyle::with_template(
-            "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
-        )
-        .unwrap(),
+    
+		let main_pb = multi_pb.add(ProgressBar::new(nodes.len() as u64));
+    main_pb.set_style(
+        ProgressStyle::with_template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7}")
+            .unwrap()
+						.progress_chars("█░ ")
     );
-
-    // Save NFT images
-    let results: Vec<Result<()>> = stream::iter(nodes.into_iter().progress().map(|node| {
+    let tasks = stream::iter(nodes.into_iter().map(|node| {
         let ens_dir = ens_dir.clone();
         let client = client.clone();
         async move { handle_download(node, &ens_dir, &client).await }
     }))
-    .buffer_unordered(args.max_concurrent_downloads)
-		.collect()
-    .await;
+    .buffer_unordered(args.max_concurrent_downloads);
 
-    for result in results {
-        match result {
-            Ok(()) => pb.inc(1),
-            Err(err) => println!("{err}"),
-        }
-    }
+    tasks
+        .for_each(|result| async {
+            match result {
+                Ok(()) => {
+                    println!("finished with success");
+                    main_pb.inc(1);
+                }
+                Err(err) => println!("finished with err"),
+            }
+        })
+        .await;
+
+    main_pb.finish();
     Ok(())
 }
 
@@ -112,3 +119,19 @@ async fn resolve_ens_name(ens_name: &str, provider: &Provider<Http>) -> Result<S
     Ok(format!("0x{}", encode(address)))
 }
 
+/* function which wraps a generic action with a spinner then returns it's reult */
+fn pending(multi_pb: &MultiProgress, msg: String) -> ProgressBar {
+    let spinner = multi_pb.add(
+        ProgressBar::new_spinner().with_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner} {prefix} {msg}")
+                .unwrap(), // .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        ),
+    );
+
+    spinner.set_prefix(format!("{}", style("INFO").green()));
+    spinner.set_message(msg);
+    spinner.enable_steady_tick(time::Duration::from_millis(100));
+
+    spinner
+}
