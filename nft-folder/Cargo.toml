@@ -2,23 +2,28 @@
 name = "nft-folder"
 version = "0.1.0"
 edition = "2021"
+authors = ["ibro <sameoldlab@proton.me>"]
+license = "MIT OR Apache-2.0"
+description = "Save NFT collection to a local directory"
+readme = "README.md"
+homepage = "https://github.com/sameoldlab/nft-folder-cli"
+repository = "https://github.com/sameoldlab/nft-folder-cli"
+keywords = ["cli", "nft", "ethereum"]
+categories = ["command-line-utilities"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-ethers = { version = "2.0", features = ["rustls"] }
-
-# Ethers' async features rely upon the Tokio async runtime.
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs"] }
-
-# Flexible concrete Error Reporting type built on std::error::Error with customizable Reports
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-reqwest = { version = "0.11", features = ["json", "blocking", "stream"] }
 base64 = "0.13.0"
-eyre = "0.6.12"
-futures = "0.3.30"
-indicatif = "0.17.8"
 console = {version = "0.15.8", features = ["ansi-parsing"]}
 clap = {version = "4.5.2", features = ["derive"]}
+eyre = "0.6.12"
+ethers = { version = "2.0", features = ["rustls"] }
+ethers-providers = { version = "2.0.14", features = ["rustls"] }
+futures = {version = "0.3.30" }
+indicatif = "0.17.8"
+reqwest = { version = "0.11", features = ["json", "blocking", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "sync"] }
+tokio-util = { version = "0.7.10", features = ["io-util"] }
+
