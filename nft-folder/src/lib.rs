@@ -256,7 +256,6 @@ impl NftResponse {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
 	/*
