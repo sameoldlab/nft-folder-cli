@@ -13,7 +13,6 @@ const RPC_URL: &str = "https://eth.llamarpc.com";
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
-
 struct Args {
     /// Address as ENS Name or hex (0x1Bca23...)
     address: String,
@@ -23,7 +22,7 @@ struct Args {
     path: std::path::PathBuf,
 
     /// maximum number of downloads to run in parallel
-    #[arg(long = "--max", default_value_t = 5)]
+    #[arg(short, long = "max", default_value_t = 5)]
     max_concurrent_downloads: usize,
 }
 struct Account {
