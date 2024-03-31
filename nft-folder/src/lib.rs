@@ -256,87 +256,21 @@ impl NftResponse {
     }
 }
 
-async fn download_image(client: &Client, image_url: &str, file_path: &str) -> Result<()> {
-    let response = client.get(image_url).send().await?;
-    let bytes = response /* .error_for_status()? */
-        .bytes()
-        .await?;
-    let mut file = File::create(file_path)?;
+/*
+#[cfg(test)]
+mod tests {
+	/*
+	use super::*;
 
-    file.write_all(&bytes)?;
-    // copy(&mut cursor, &mut file)?;
-    Ok(())
-}
+    #[test]
+    async fn resolve() {
+        let provider: Provider<Http> = Provider::<Http>::try_from("https://eth.llamarpc.com");
 
-async fn _download_image_auto(client: &Client, image_url: &str, file_dir: &str) -> Result<String> {
-    // Send a GET request to the URL
-    let response = client.get(image_url).send().await?;
+        let address = &provider.resolve_name("tygra.eth").await;
+        let result = format!("0x{}", encode(address));
+        // let result = resolve_ens_name("tygra.eth", &provider);
 
-    // Check for HTTP errors
-    let response_status = response.status();
-    if !response_status.is_success() {
-        let error_message = format!(
-            "Error fetching {}: received HTTP status {}",
-            image_url, response_status
-        );
-        return Err(eyre!(error_message));
+        assert_eq!(result, "0x");
     }
-
-    // Extract the file name and type from the response headers
-    let content_type = response
-        .headers()
-        .get("Content-Type")
-        .and_then(|value| value.to_str().ok().map(|s| s.to_string()));
-
-    let bytes = response /* .error_for_status()? */
-        .bytes()
-        .await?;
-    let file_path = format!(
-        "{file_dir}.{}",
-        &content_type
-            .unwrap_or_default()
-            .rsplit('/')
-            .next()
-            .unwrap_or("")
-    );
-    let mut file = File::create(&file_path)?;
-
-    file.write_all(&bytes)?;
-    // copy(&mut cursor, &mut file)?;
-    Ok(file_path)
-}
-
-pub async fn create_directory(dir_path: &str) -> Result<()> {
-    match fs::metadata(dir_path).await {
-        Ok(metadata) => {
-            if !metadata.is_dir() {
-                return Err(io::Error::new(
-                    ErrorKind::InvalidInput,
-                    format!("{dir_path} is not a directory"),
-                )
-                .into());
-            }
-        }
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            fs::create_dir_all(dir_path).await?;
-            println!("created directory: {dir_path}");
-        }
-        Err(e) => {
-            return Err(e.into());
-        }
-    }
-    Ok(())
-}
-
-async fn file_exists(file_path: &str) -> bool {
-    fs::metadata(file_path)
-        .await
-        .map_or(false, |metadata| metadata.is_file())
-}
-
-fn save_base64_image(base64_data: &str, file_path: &str) -> Result<()> {
-    let decoded_data = decode(base64_data)?;
-    let mut file = File::create(file_path)?;
-    file.write_all(&decoded_data)?;
-    Ok(())
-}
+		*/
+	}
