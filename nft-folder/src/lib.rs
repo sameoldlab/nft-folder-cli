@@ -1,22 +1,24 @@
 use base64::decode;
-use ethers::{
-    prelude::*,
-    providers::{Middleware, Provider},
-    utils::hex,
-};
 use eyre::{eyre, Result};
+use futures::{
+    stream::{StreamExt, TryStreamExt},
+    Stream
+};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
+use std::{fs::{self}, io::Cursor, path::PathBuf};
 use std::{
     fs::File,
-    io::{self, ErrorKind, Write},
+    io::{self, ErrorKind, Read, Write},
 };
-use tokio::fs;
+use tokio::sync::mpsc;
+use tokio_util::bytes::Bytes;
 
 const DEBUG: bool = false;
+pub async fn handle_download(node: NftNode, dir: &PathBuf, client: &Client) -> Result<()> {
+    /* Pin<Box<dyn Stream<Item = Result<DownloadResult>>>> */
     let image = &node.token.image;
-
     let name = match &node.token.name {
         Some(name) => name,
         None => return Err(eyre!("Image data not found for {:#?}", node)),
@@ -40,39 +42,40 @@ const DEBUG: bool = false;
         url.rsplit('.').next().unwrap_or_default().to_lowercase()
     };
 
-    let file_path = format!("{ens_dir}/{name}.{extension}");
-
-    /* Need to check if the file exist, but don't reliably know the file extension till download_image_auto */
-    if file_exists(&file_path).await {
+    let file_path = dir.join(format!("{name}.{extension}"));
+		
+    if file_path.is_file() {
         if DEBUG {
             println!("Skipping {name}");
         }
+        // progress.inc(1);
         return Ok(());
     }
 
     if DEBUG {
-        println!("Downloading {name} to {file_path}");
+        println!("Downloading {name} to {:?}", file_path);
     }
 
+    let (progress_tx, mut _progress_rx) = mpsc::channel(10); // Adjust the buffer size as needed
     match url {
         // Decode and save svg
         url if url.starts_with("data:image/svg") => save_base64_image(
             &url.strip_prefix("data:image/svg+xml;base64,")
                 .unwrap_or(&url),
-            &file_path,
+            file_path,
         )?,
         // append IPFS gateway
         url if url.starts_with("ipfs") => {
             let parts: Vec<&str> = url.split('/').collect();
             if let Some(hash) = parts.iter().find(|&&part| part.starts_with("Qm")) {
                 let ipfs_url = format!("https://ipfs.io/ipfs/{hash}");
-                if let Err(error) = download_image(&client, &ipfs_url, &file_path).await {
+                if let Err(error) = download_image(&client, &ipfs_url, file_path, progress_tx).await {
                     return Err(eyre::eyre!("Error downloading image {}: {}", name, error));
                 }
             }
         }
         url => {
-            if let Err(error) = download_image(&client, &url, &file_path).await {
+            if let Err(error) = download_image(&client, &url, file_path, progress_tx).await {
                 return Err(eyre::eyre!("Error downloading image {}: {}", name, error));
             };
         }
@@ -85,9 +88,71 @@ const DEBUG: bool = false;
     Ok(())
 }
 // async fn get_address()
-pub async fn resolve_ens_name(ens_name: &str, provider: &Provider<Http>) -> Result<String> {
-    let address = provider.resolve_name(ens_name).await?;
-    Ok(format!("0x{}", hex::encode(address)))
+
+async fn download_image(
+    client: &Client,
+    image_url: &str,
+    file_path: PathBuf,
+    progress_tx: mpsc::Sender<(u64, u64)>,
+) -> Result<()> {
+    let response = client.get(image_url).send().await?;
+    let content_length = response.content_length().unwrap_or(0);
+    let mut byte_stream = response.bytes_stream();
+
+    let mut progress: u64 = 0; 
+    let mut file = File::create(file_path)?;
+
+    while let Some(chunk) = byte_stream.next().await {
+			let chunk = chunk?;
+			let chunk_len = chunk.len();
+
+			progress += chunk_len as u64;
+			file.write_all(&chunk)
+					.map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+			// Send progress update through the channel
+			let _ = progress_tx.send((progress, content_length)).await;
+	}
+
+    if content_length != progress {
+        return Err(eyre::eyre!(
+            "Downloaded file size does not match the expected size"
+        ));
+    }
+
+    Ok(())
+}
+
+pub async fn create_directory(dir_path: &PathBuf) -> Result<PathBuf>
+ {
+    let res  = match fs::metadata(dir_path) {
+        Ok(metadata) => {
+            if !metadata.is_dir() {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("{:?} is not a directory", dir_path),
+                )
+                .into());
+            }
+						dir_path.to_path_buf()
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            fs::create_dir_all(dir_path)?;
+            if DEBUG { println!("created directory: {:?}", dir_path);}
+						dir_path.to_path_buf()
+        }
+        Err(e) => {
+            return Err(e.into());
+        }
+    };
+    Ok(res)
+}
+
+fn save_base64_image(base64_data: &str, file_path: PathBuf) -> Result<()> {
+    let decoded_data = decode(base64_data)?;
+    let mut file = File::create(file_path)?;
+    file.write_all(&decoded_data)?;
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -102,10 +167,8 @@ pub enum NftImage {
         mime_type: Option<String>,
     },
 }
-
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-
 pub struct NftToken {
     pub image: NftImage,
     pub name: Option<String>,
@@ -114,7 +177,6 @@ pub struct NftToken {
     pub token_id: Option<String>,
     pub metadata: Option<serde_json::Value>,
 }
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NftNode {
     token: NftToken,
@@ -125,11 +187,11 @@ pub struct NftTokens {
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NftData {
-	pub tokens: NftTokens,
+    pub tokens: NftTokens,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NftResponse {
-	pub data: NftData,
+    pub data: NftData,
 }
 
 impl NftResponse {

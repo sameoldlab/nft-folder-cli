@@ -1,5 +1,5 @@
 use ::core::time;
-use clap::Parser;
+use clap::{arg, Parser};
 use console::style;
 use ethers::utils::hex::encode;
 use ethers_providers::{Http, Middleware, Provider};
@@ -69,18 +69,15 @@ async fn main() -> Result<()> {
         .nodes;
     spinner.finish();
 
-    println!("Found {} NFTs. Starting download...", nodes.len());
-
-    let path = match std::fs::read_to_string(args.path) {
+    let path =  match account.name {
+			Some(name) => args.path.join( name),
+			None => args.path.join(account.address),
+		};
+		
+		match create_directory(&path).await { 
         Ok(path) => path,
         Err(err) => return Err(eyre::eyre!("{} {err}", style("Invalid Path").red())),
     };
-    // Create the directory based on the ENS name
-    let ens_dir = match account.name {
-        Some(name) => format!("{path}/{}", name),
-        None => format!("{path}/{}", account.address),
-    };
-    create_directory(&ens_dir).await?;
 
     let client = Client::new();
     
