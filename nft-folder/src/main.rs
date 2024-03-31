@@ -8,8 +8,6 @@ use futures::stream::{self, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use nft_folder::{self, create_directory, handle_download, NftResponse};
 use reqwest::Client;
-use std::env;
-const RPC_URL: &str = "https://eth.llamarpc.com";
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -17,13 +15,17 @@ struct Args {
     /// Address as ENS Name or hex (0x1Bca23...)
     address: String,
 
-    /// directory to create nft folder [coming soon]
+    /// directory to create nft folder
     #[arg(short, long, default_value = "./test")]
     path: std::path::PathBuf,
 
-    /// maximum number of downloads to run in parallel
+    /// maximum number of parallel downloads
     #[arg(short, long = "max", default_value_t = 5)]
     max_concurrent_downloads: usize,
+
+    /// RPC Url
+		#[arg(long, default_value = "https://eth.llamarpc.com")]
+    rpc: String,
 }
 struct Account {
     name: Option<String>,
@@ -34,15 +36,14 @@ struct Account {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let multi_pb = MultiProgress::new();
-    let provider = Provider::<Http>::try_from(RPC_URL)?;
+    let provider = Provider::<Http>::try_from(args.rpc)?;
 
     let account = match &args.address {
         arg if arg.split(".").last().unwrap() == "eth" => {
             // format!("{spinner} {} {msg}", style("INFO").bright());
             let spinner = pending(&multi_pb, "Resolving address...".to_string());
             let address = resolve_ens_name(&arg, &provider).await?;
-            spinner.set_message(format!("Resolving address: {}", address));
-            spinner.finish();
+            spinner.finish_with_message(format!("Resolving address: {}", address));
 
             Account {
                 name: Some(arg.to_string()),
@@ -67,7 +68,7 @@ async fn main() -> Result<()> {
         .data
         .tokens
         .nodes;
-    spinner.finish();
+    spinner.finish_with_message(format!("Found {} NFTs. Starting download...", nodes.len()));
 
     let path =  match account.name {
 			Some(name) => args.path.join( name),
@@ -88,9 +89,10 @@ async fn main() -> Result<()> {
 						.progress_chars("█░ ")
     );
     let tasks = stream::iter(nodes.into_iter().map(|node| {
-        let ens_dir = ens_dir.clone();
+
+        let path = path.clone();
         let client = client.clone();
-        async move { handle_download(node, &ens_dir, &client).await }
+        async move { handle_download(node, &path, &client).await }
     }))
     .buffer_unordered(args.max_concurrent_downloads);
 
@@ -98,7 +100,7 @@ async fn main() -> Result<()> {
         .for_each(|result| async {
             match result {
                 Ok(()) => {
-                    println!("finished with success");
+                    // println!("finished with success");
                     main_pb.inc(1);
                 }
                 Err(err) => println!("finished with err"),
@@ -125,7 +127,7 @@ fn pending(multi_pb: &MultiProgress, msg: String) -> ProgressBar {
         ),
     );
 
-    spinner.set_prefix(format!("{}", style("INFO").green()));
+    spinner.set_prefix(format!("{}", style("INFO").bold().on_blue()));
     spinner.set_message(msg);
     spinner.enable_steady_tick(time::Duration::from_millis(100));
 
