@@ -21,4 +21,4 @@ eyre = "0.6.12"
 futures = "0.3.30"
 indicatif = "0.17.8"
 console = {version = "0.15.8", features = ["ansi-parsing"]}
-clap = "4.5.2"
+clap = {version = "4.5.2", features = ["derive"]}

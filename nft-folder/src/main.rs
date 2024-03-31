@@ -1,5 +1,8 @@
 use ::core::time;
-use ethers::{prelude::*, providers::Provider};
+use clap::Parser;
+use console::style;
+use ethers::utils::hex::encode;
+use ethers_providers::{Http, Middleware, Provider};
 use eyre::Result;
 use futures::stream::{self, StreamExt};
 use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
@@ -8,6 +11,21 @@ use reqwest::Client;
 use std::env;
 const RPC_URL: &str = "https://eth.llamarpc.com";
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+
+struct Args {
+    /// Address as ENS Name or hex (0x1Bca23...)
+    address: String,
+
+    /// directory to create nft folder [coming soon]
+    #[arg(short, long, default_value = "./test")]
+    path: std::path::PathBuf,
+
+    /// maximum number of downloads to run in parallel
+    #[arg(long = "--max", default_value_t = 5)]
+    max_concurrent_downloads: usize,
+}
 struct Account {
     name: Option<String>,
     address: String,
@@ -15,16 +33,10 @@ struct Account {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    //
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <ENS name>", args[0]);
-        std::process::exit(1);
-    }
-
+    let args = Args::parse();
     let provider = Provider::<Http>::try_from(RPC_URL)?;
 
-    let account = match &args[1] {
+    let account = match &args.address {
         arg if arg.split(".").last().unwrap() == "eth" => {
             let spinner = ProgressBar::new_spinner();
             spinner.set_message("Resolving address...");
@@ -54,10 +66,14 @@ async fn main() -> Result<()> {
     let nodes = response_json.data.tokens.nodes;
     println!("Found {} NFTs. Starting download...", nodes.len());
 
+    let path = match std::fs::read_to_string(args.path) {
+        Ok(path) => path,
+        Err(err) => return Err(eyre::eyre!("{} {err}", style("Invalid Path").red())),
+    };
     // Create the directory based on the ENS name
     let ens_dir = match account.name {
-        Some(name) => format!("./test/{}", name),
-        None => format!("./test/{}", account.address),
+        Some(name) => format!("{path}/{}", name),
+        None => format!("{path}/{}", account.address),
     };
 
     create_directory(&ens_dir).await?;
@@ -78,8 +94,8 @@ async fn main() -> Result<()> {
         let client = client.clone();
         async move { handle_download(node, &ens_dir, &client).await }
     }))
-    .buffer_unordered(max_concurrent_downloads)
-    .collect()
+    .buffer_unordered(args.max_concurrent_downloads)
+		.collect()
     .await;
 
     for result in results {
