@@ -6,7 +6,7 @@ use ethers_providers::{Http, Middleware, Provider};
 use eyre::Result;
 use futures::stream::{self, StreamExt};
 use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
-use nft_folder::{self, create_directory, handle_download, resolve_ens_name, NftResponse};
+use nft_folder::{self, create_directory, handle_download, NftResponse};
 use reqwest::Client;
 use std::env;
 const RPC_URL: &str = "https://eth.llamarpc.com";
@@ -106,3 +106,9 @@ async fn main() -> Result<()> {
     }
     Ok(())
 }
+
+async fn resolve_ens_name(ens_name: &str, provider: &Provider<Http>) -> Result<String> {
+    let address = provider.resolve_name(ens_name).await?;
+    Ok(format!("0x{}", encode(address)))
+}
+
