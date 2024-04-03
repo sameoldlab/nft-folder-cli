@@ -1,19 +1,32 @@
 use base64::decode;
 use eyre::{eyre, Result};
 use futures::{
-    stream::{StreamExt, TryStreamExt},
+    stream::StreamExt,
     Stream
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
-use std::{fs::{self}, io::Cursor, path::PathBuf};
+use std::{fs, io::Cursor, path::PathBuf, time::Duration};
 use std::{
     fs::File,
     io::{self, ErrorKind, Read, Write},
 };
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, time::sleep};
 use tokio_util::bytes::Bytes;
+
+pub async fn test_progress(node: NftNode, progress_tx: mpsc::Sender<DownloadResult>) {
+	let file_path = match node.token.name {
+		Some(name) => name,
+		None => "d".to_string()
+	};
+
+	for n in 0..100 {
+		sleep(Duration::from_millis(500)).await;
+		let file_path = file_path.clone();
+		progress_tx.send(DownloadResult {file_path, progress: n, total: 100}).await.unwrap();
+	}
+}
 
 const DEBUG: bool = false;
 pub async fn handle_download(node: NftNode, dir: &PathBuf, client: &Client) -> Result<()> {
@@ -88,6 +101,66 @@ pub async fn handle_download(node: NftNode, dir: &PathBuf, client: &Client) -> R
     Ok(())
 }
 // async fn get_address()
+
+pub struct DownloadProgress {
+    pub name: String,
+    pub progress: u64,
+    pub total: u64,
+}
+
+#[derive(Debug)]
+pub struct DownloadResult {
+    file_path: String,
+    progress: u64,
+    total: u64,
+}
+
+struct ProgressTracker {
+    progress: u64,
+}
+impl ProgressTracker {
+    fn new() -> Self {
+        ProgressTracker { progress: 0 }
+    }
+
+    // async fn track_progress<R: Read + Unpin>(
+    async fn track_progress<R: Stream<Item = Result<Bytes>> + Unpin>(
+        &mut self,
+        index: usize,
+        mut reader_stream: R,
+        mut file: File,
+        progress_tx: &mpsc::Sender<(usize, u64)>,
+    ) -> Result<()> {
+        let mut buffer = [0; 8192];
+        while let Some(chunk_result) = reader_stream.next().await {
+            let chunk = match chunk_result {
+                Ok(chunk) => chunk,
+                Err(e) => return Err(e.into()),
+            };
+
+            let mut cursor = Cursor::new(chunk);
+            let bytes_read = cursor.read(&mut buffer)?;
+            file.write_all(&buffer[..bytes_read])?;
+            self.progress += bytes_read as u64;
+
+            match progress_tx.try_send((index, self.progress)) {
+                Ok(_) => {
+                    // The progress update was sent successfully.
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // The receiver's buffer is full, you can either:
+                    // 1. Drop the progress update and continue downloading
+                    // 2. Wait for the receiver to process some messages before sending more updates
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    // The receiver was dropped, so we stop sending progress updates.
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
 async fn download_image(
     client: &Client,
