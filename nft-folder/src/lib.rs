@@ -255,20 +255,55 @@ pub struct NftNode {
     token: NftToken,
 }
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PageInfo {
+    end_cursor: String,
+    has_next_page: bool,
+    limit: i32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct NftTokens {
     pub nodes: Vec<NftNode>,
+    #[serde(rename = "camelCase")]
+    pub page_info: PageInfo,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NftData {
     pub tokens: NftTokens,
 }
-#[derive(Serialize, Deserialize, Debug)]
-pub struct NftResponse {
-    pub data: NftData,
+#[derive(Deserialize, Serialize, Debug)]
+pub struct FailedRequest {
+    message: String,
+    locations: Vec<ErrorLocation>,
+    path: Vec<String>,
+}
+#[derive(Deserialize, Serialize, Debug)]
+struct ErrorLocation {
+    line: u64,
+    column: u64,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(untagged)]
+pub enum NftResponse {
+    Success { data: NftData },
+    Error { errors: FailedRequest},
+}
+
+
 impl NftResponse {
-    pub async fn request(address: &str) -> Result<NftResponse> {
+	fn handle_errors(self) -> Option<NftData> {
+        match self {
+            NftResponse::Success { data } => Some(data),
+            NftResponse::Error { errors } => {
+                println!("Errors: {:?}", errors);
+                None
+            }
+        }
+    }
+
+    pub async fn request(address: &str) -> Result<NftData> {
         let query = format!(
             r#"
 		query NFTsForAddress {{
@@ -287,6 +322,11 @@ impl NftResponse {
 							mimeType
 						}}
 						metadata
+					}}
+					pageInfo {{
+					    endCursor
+					    hasNextPage
+					    limit
 					}}
 				}}
 			}}
@@ -321,11 +361,13 @@ impl NftResponse {
         }
         let response: NftResponse = serde_json::from_str(&response_str)
             .map_err(|err| eyre!("Failed to parse JSON response: {}", err))?;
+
+        let data = response.handle_errors().unwrap();
         if DEBUG {
-            println!("{:#?}", &response.data.tokens.nodes);
+            println!("{:#?}", &data);
         }
 
-        Ok(response)
+        Ok(data)
     }
 }
 
