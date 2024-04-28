@@ -1,6 +1,4 @@
 [workspace]
 resolver = "2"
 members = ["nemo-plugin", "nft-folder"]
-
-[profile.dev]
-default-run = "nft-folder"
+default-members = ["nft-folder"]
