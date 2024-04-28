@@ -1,3 +1,5 @@
+mod download;
+mod request;
 use ::core::time;
 use clap::{Args, Parser, Subcommand};
 use console::style;
@@ -6,7 +8,8 @@ use ethers_providers::{Http, Middleware, Provider};
 use eyre::Result;
 use futures::stream::{self, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use nft_folder::{self, create_directory, handle_download, NftResponse};
+use crate::download::{create_directory, handle_download, DownloadResult};
+use crate::request::NftResponse;
 use reqwest::Client;
 use std::borrow::Borrow;
 use tokio::sync::mpsc;
