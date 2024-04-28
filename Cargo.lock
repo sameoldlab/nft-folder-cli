@@ -1618,9 +1618,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "763a5a8f45087d6bcea4222e7b72c291a054edf80e4ef6efd2a4979878c7bea3"
 dependencies = [
  "console",
+ "futures-core",
  "instant",
  "number_prefix",
  "portable-atomic",
+ "tokio",
  "unicode-width",
 ]
 
@@ -1874,7 +1876,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nft-folder"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.13.1",
  "clap",
