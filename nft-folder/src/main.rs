@@ -1,5 +1,8 @@
 mod download;
 mod request;
+
+use crate::download::{create_directory, handle_download, DownloadResult};
+use crate::request::NftResponse;
 use ::core::time;
 use clap::{Args, Parser, Subcommand};
 use console::style;
@@ -8,8 +11,6 @@ use ethers_providers::{Http, Middleware, Provider};
 use eyre::Result;
 use futures::stream::{self, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use crate::download::{create_directory, handle_download, DownloadResult};
-use crate::request::NftResponse;
 use reqwest::Client;
 use std::borrow::Borrow;
 use tokio::sync::mpsc;
@@ -84,8 +85,7 @@ async fn main() -> Result<()> {
             };
             // Request
             let spinner = pending(&multi_pb, "Requesting collection data...".to_string());
-            let nodes = NftResponse::request(&account.address)
-                .await?.tokens.nodes;
+            let nodes = NftResponse::request(&account.address).await?.tokens.nodes;
             spinner
                 .finish_with_message(format!("Found {} NFTs. Starting download...", nodes.len()));
 
@@ -283,17 +283,63 @@ async fn resolve_ens_name(ens_name: &str, provider: &Provider<Http>) -> Result<S
 
 /* function which wraps a generic action with a spinner then returns it's reult */
 fn pending(multi_pb: &MultiProgress, msg: String) -> ProgressBar {
-    let spinner = multi_pb.add(
-        ProgressBar::new_spinner().with_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner} {prefix} {msg}")
-                .unwrap(), // .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
-        ),
-    );
-
-    spinner.set_prefix(format!("{}", style("INFO").bold().on_blue()));
+    // https://github.com/sindresorhus/cli-spinners/blob/main/spinners.json
+    let style = ProgressStyle::default_spinner()
+        .template("{spinner} {prefix:.bold.blue} {msg}")
+        .unwrap()
+        .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶"]);
+    let spinner = multi_pb.add(ProgressBar::new_spinner().with_style(style));
+    spinner.set_prefix("INFO");
     spinner.set_message(msg);
     spinner.enable_steady_tick(time::Duration::from_millis(100));
 
     spinner
 }
+
+/*
+#[tokio::main]
+async fn main() -> eyre::Result<()>{
+        let nodes = vec![
+                "first".to_string(),
+                "second".to_string(),
+                "third".to_string(),
+                "fourth node".to_string(),
+        ];
+
+        let (tx, rx) = std::sync::mpsc::channel::<Ret>();
+        let tasks = stream::iter(nodes.into_iter().map(|node| {
+                let tx = tx.clone();
+                async move { worker2(node, tx).await }
+        }))
+        .buffer_unordered(2);
+
+        // indicatif Multiprogress
+        let multi_pb = MultiProgress::new();
+        // Tracks total progress of nodes
+        let total_pb = multi_pb.add(ProgressBar::new(nodes.len().try_into()?));
+
+        tasks
+                .for_each(|result| async {
+                    let pb = multi_pb.insert_before(&total_pb, ProgressBar::new(100));
+                    pb.set_style(
+                            ProgressStyle::with_template(
+                                    "{wide_msg:!} {bytes_per_sec} {elapsed:>} {bar:40} {percent:>3}% ",
+                            )
+                            .unwrap()
+                            .progress_chars("██ "),
+                    );
+                    match result {
+                        Ok(res) => {
+                                    pb.set_message(res);
+                                    while let Ok(recv) = rx.recv() {
+                                        let pos = recv.progress * 100 / recv.total;
+                                        pb.set_position(pos);
+                                }
+                                        total_pb.inc(1);
+                                }
+                        Err(_err) => pb.abandon_with_message("Error during download"),
+                        }
+                })
+                .await;
+        Ok(())
+} */

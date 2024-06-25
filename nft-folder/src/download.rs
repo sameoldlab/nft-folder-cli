@@ -12,16 +12,23 @@ use tokio::{sync::mpsc, time::sleep};
 use tokio_util::bytes::Bytes;
 
 pub async fn test_progress(node: NftNode, progress_tx: mpsc::Sender<DownloadResult>) {
-	let file_path = match node.token.name {
-		Some(name) => name,
-		None => "d".to_string()
-	};
+    let file_path = match node.token.name {
+        Some(name) => name,
+        None => "d".to_string(),
+    };
 
-	for n in 0..100 {
-		sleep(Duration::from_millis(500)).await;
-		let file_path = file_path.clone();
-		progress_tx.send(DownloadResult {file_path, progress: n, total: 100}).await.unwrap();
-	}
+    for n in 0..100 {
+        sleep(Duration::from_millis(500)).await;
+        let file_path = file_path.clone();
+        progress_tx
+            .send(DownloadResult {
+                file_path,
+                progress: n,
+                total: 100,
+            })
+            .await
+            .unwrap();
+    }
 }
 
 const DEBUG: bool = false;
@@ -52,7 +59,7 @@ pub async fn handle_download(node: NftNode, dir: &PathBuf, client: &Client) -> R
     };
 
     let file_path = dir.join(format!("{name}.{extension}"));
-		
+
     if file_path.is_file() {
         if DEBUG {
             println!("Skipping {name}");
@@ -78,7 +85,8 @@ pub async fn handle_download(node: NftNode, dir: &PathBuf, client: &Client) -> R
             let parts: Vec<&str> = url.split('/').collect();
             if let Some(hash) = parts.iter().find(|&&part| part.starts_with("Qm")) {
                 let ipfs_url = format!("https://ipfs.io/ipfs/{hash}");
-                if let Err(error) = download_image(&client, &ipfs_url, file_path, progress_tx).await {
+                if let Err(error) = download_image(&client, &ipfs_url, file_path, progress_tx).await
+                {
                     return Err(eyre::eyre!("Error downloading image {}: {}", name, error));
                 }
             }
@@ -111,53 +119,6 @@ pub struct DownloadResult {
     total: u64,
 }
 
-struct ProgressTracker {
-    progress: u64,
-}
-impl ProgressTracker {
-    fn new() -> Self {
-        ProgressTracker { progress: 0 }
-    }
-
-    // async fn track_progress<R: Read + Unpin>(
-    async fn track_progress<R: Stream<Item = Result<Bytes>> + Unpin>(
-        &mut self,
-        index: usize,
-        mut reader_stream: R,
-        mut file: File,
-        progress_tx: &mpsc::Sender<(usize, u64)>,
-    ) -> Result<()> {
-        let mut buffer = [0; 8192];
-        while let Some(chunk_result) = reader_stream.next().await {
-            let chunk = match chunk_result {
-                Ok(chunk) => chunk,
-                Err(e) => return Err(e.into()),
-            };
-
-            let mut cursor = Cursor::new(chunk);
-            let bytes_read = cursor.read(&mut buffer)?;
-            file.write_all(&buffer[..bytes_read])?;
-            self.progress += bytes_read as u64;
-
-            match progress_tx.try_send((index, self.progress)) {
-                Ok(_) => {
-                    // The progress update was sent successfully.
-                }
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    // The receiver's buffer is full, you can either:
-                    // 1. Drop the progress update and continue downloading
-                    // 2. Wait for the receiver to process some messages before sending more updates
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    // The receiver was dropped, so we stop sending progress updates.
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
 async fn download_image(
     client: &Client,
     image_url: &str,
@@ -168,20 +129,20 @@ async fn download_image(
     let content_length = response.content_length().unwrap_or(0);
     let mut byte_stream = response.bytes_stream();
 
-    let mut progress: u64 = 0; 
+    let mut progress: u64 = 0;
     let mut file = File::create(file_path)?;
 
     while let Some(chunk) = byte_stream.next().await {
-			let chunk = chunk?;
-			let chunk_len = chunk.len();
+        let chunk = chunk?;
+        let chunk_len = chunk.len();
 
-			progress += chunk_len as u64;
-			file.write_all(&chunk)
-					.map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        progress += chunk_len as u64;
+        file.write_all(&chunk)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
-			// Send progress update through the channel
-			let _ = progress_tx.send((progress, content_length)).await;
-	}
+        // Send progress update through the channel
+        let _ = progress_tx.send((progress, content_length)).await;
+    }
 
     if content_length != progress {
         return Err(eyre::eyre!(
@@ -192,9 +153,8 @@ async fn download_image(
     Ok(())
 }
 
-pub async fn create_directory(dir_path: &PathBuf) -> Result<PathBuf>
- {
-    let res  = match fs::metadata(dir_path) {
+pub async fn create_directory(dir_path: &PathBuf) -> Result<PathBuf> {
+    let res = match fs::metadata(dir_path) {
         Ok(metadata) => {
             if !metadata.is_dir() {
                 return Err(io::Error::new(
@@ -203,12 +163,14 @@ pub async fn create_directory(dir_path: &PathBuf) -> Result<PathBuf>
                 )
                 .into());
             }
-						dir_path.to_path_buf()
+            dir_path.to_path_buf()
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {
             fs::create_dir_all(dir_path)?;
-            if DEBUG { println!("created directory: {:?}", dir_path);}
-						dir_path.to_path_buf()
+            if DEBUG {
+                println!("created directory: {:?}", dir_path);
+            }
+            dir_path.to_path_buf()
         }
         Err(e) => {
             return Err(e.into());
@@ -226,8 +188,8 @@ fn save_base64_image(base64_data: &str, file_path: PathBuf) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-	/*
-	use super::*;
+    /*
+    use super::*;
 
     #[test]
     async fn resolve() {
@@ -239,5 +201,5 @@ mod tests {
 
         assert_eq!(result, "0x");
     }
-		*/
-	}
+        */
+}
