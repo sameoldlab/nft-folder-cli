@@ -58,8 +58,11 @@ pub async fn handle_token(
     let file_path = dir.join(format!("{name}.{extension}"));
 
     if file_path.is_file() {
-        let pb = mp.add(ProgressBar::new(100).with_message(msg).with_style(pb_style));
-        pb.finish_with_message(format!("Already downloaded {name}"));
+        let pb = mp.insert(
+            0,
+            ProgressBar::new(100).with_message(msg).with_style(pb_style),
+        );
+        pb.finish_with_message(format!("Already saved {name}"));
         return Ok(());
     }
 
@@ -68,7 +71,10 @@ pub async fn handle_token(
     }
 
     if url.starts_with("data:image/svg") {
-        let pb = mp.add(ProgressBar::new(100).with_message(msg).with_style(pb_style));
+        let pb = mp.insert(
+            0,
+            ProgressBar::new(100).with_message(msg).with_style(pb_style),
+        );
         decode_and_save(
             &url.strip_prefix("data:image/svg+xml;base64,")
                 .unwrap_or(&url),
@@ -77,7 +83,10 @@ pub async fn handle_token(
         pb.finish();
     } else {
         let permit = semaphore.acquire_owned().await.unwrap();
-        let pb = mp.add(ProgressBar::new(100).with_message(msg).with_style(pb_style));
+        let pb = mp.insert(
+            0,
+            ProgressBar::new(100).with_message(msg).with_style(pb_style),
+        );
 
         let url = if url.starts_with("ipfs") {
             // append IPFS gateway
@@ -88,25 +97,29 @@ pub async fn handle_token(
             match hash {
                 Some(hash) => format!("https://ipfs.io/ipfs/{}", hash),
                 None => {
-                    // pb.finish_with_message(format!("IPFS hash not found in URL for {name}"));
+                    // Handle the case where the hash is not found
+                    pb.abandon_with_message(format!("IPFS hash not found in URL for {name}"));
                     return Err(eyre::eyre!("IPFS hash not found in URL"));
-                } //if a single image fails I want to finish it immediately without disrupting other ongoing processess
+                }
             }
         } else {
             url.to_owned()
         };
 
         let client = client.clone();
-        let name_cp = name.clone();
 
         tokio::spawn(async move {
             // pb.set_position(i);
-            match download_image(&client, &url, file_path, &pb).await {
-                Ok(()) => pb.finish(),
+            match download_image(&client, &url, &file_path, &pb).await {
+                Ok(()) => {
+                    pb.finish_with_message(format!("Completed {name}"));
+
+                    // Ok(())
+                }
                 Err(error) => {
-                    pb.finish_with_message(format!(
-                        "Error downloading image {}: {}",
-                        name_cp, error
+                    pb.abandon_with_message(format!(
+                        "Download failed: {} to {:?}. {}",
+                        name, file_path, error
                     ));
                     // return Err(eyre::eyre!("Error downloading image {}: {}", name, error));
                 }

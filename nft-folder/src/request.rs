@@ -1,7 +1,7 @@
 use crate::download::handle_token;
 use eyre::{eyre, Result};
 use futures::{stream, StreamExt};
-use indicatif::MultiProgress;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
@@ -188,16 +188,38 @@ pub async fn handle_processing(client: &Client, address: &str, path: PathBuf) ->
     .flatten();
     tokio::pin!(requests);
 
+
+    mp.set_alignment(indicatif::MultiProgressAlignment::Bottom);
+    let total_pb = mp.add(ProgressBar::new(0));
+    total_pb.set_style(ProgressStyle::with_template(
+        "{spinner:.magenta} {pos:>3.bold.blue} of {len:>3.bold.blue} {msg}",
+        )
+        .unwrap()
+        .progress_chars("█▉▊▋▌▍▎▏ "));
+        // .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶"]));
+    total_pb.set_message("Complete");
+    
+
     while let Some(token) = requests.next().await {
+        total_pb.inc_length(1);
         // let url = token.token_url.unwrap();
         match token {
             PageResult::Data(token) => {
                 // println!("Sending {:?}", token.name);
-                let _ = handle_token(Arc::clone(&semaphore), token, &client, &mp, &path).await;
+                match handle_token(Arc::clone(&semaphore), token, &client, &mp, &path).await {
+                    Ok(()) => {
+                        total_pb.inc(1);
+                    }
+                    Err(err) => {
+                        total_pb.println(format!("{}", err));
+                    }
+                }
             }
-            PageResult::Completed => break,
+            PageResult::Completed => {
+                total_pb.abandon_with_message("Completed Sucessfully");
+                return Ok(())
+            },
         }
     }
-
     Ok(())
 }
