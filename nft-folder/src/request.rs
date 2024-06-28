@@ -1,11 +1,11 @@
-use crate::download::download_image;
+use crate::download::handle_token;
 use eyre::{eyre, Result};
 use futures::{stream, StreamExt};
-use indicatif::{MultiProgress, ProgressBar};
+use indicatif::MultiProgress;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Semaphore;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -152,7 +152,7 @@ pub async fn fetch_page(
     Ok(data.tokens)
 }
 
-pub async fn handle_processing(client: &Client, address: &str) -> eyre::Result<()> {
+pub async fn handle_processing(client: &Client, address: &str, path: PathBuf) -> eyre::Result<()> {
     let semaphore = Arc::new(Semaphore::new(4));
     let mp = MultiProgress::new();
 
@@ -181,7 +181,7 @@ pub async fn handle_processing(client: &Client, address: &str) -> eyre::Result<(
 
     while let Some(token) = requests.next().await {
         // let url = token.token_url.unwrap();
-        download_image(Arc::clone(&semaphore), token, &mp).await;
+        let _ = handle_token(Arc::clone(&semaphore), token, &client, &mp, &path).await;
     }
 
     Ok(())
