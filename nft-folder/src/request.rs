@@ -108,7 +108,6 @@ pub async fn fetch_page(
                                         size
                                         mimeType
                                     }}
-                                    metadata
                             }}
                         }}
                         pageInfo {{
@@ -152,6 +151,10 @@ pub async fn fetch_page(
     Ok(data.tokens)
 }
 
+enum PageResult {
+    Data(NftToken),
+    Completed,
+}
 pub async fn handle_processing(client: &Client, address: &str, path: PathBuf) -> eyre::Result<()> {
     let semaphore = Arc::new(Semaphore::new(4));
     let mp = MultiProgress::new();
@@ -160,7 +163,13 @@ pub async fn handle_processing(client: &Client, address: &str, path: PathBuf) ->
     let requests = stream::unfold(cursor, move |cursor| async move {
         match fetch_page(&client, cursor, address).await {
             Ok(response) => {
-                let items = stream::iter(response.nodes.into_iter().map(|node| node.token));
+                let items = stream::iter(response.nodes.into_iter().map(move |node| {
+                    if response.page_info.has_next_page {
+                        PageResult::Data(node.token)
+                    } else {
+                        PageResult::Completed
+                    }
+                }));
                 let next_cursor = if response.page_info.has_next_page {
                     response.page_info.end_cursor
                 } else {
@@ -181,7 +190,13 @@ pub async fn handle_processing(client: &Client, address: &str, path: PathBuf) ->
 
     while let Some(token) = requests.next().await {
         // let url = token.token_url.unwrap();
-        let _ = handle_token(Arc::clone(&semaphore), token, &client, &mp, &path).await;
+        match token {
+            PageResult::Data(token) => {
+                // println!("Sending {:?}", token.name);
+                let _ = handle_token(Arc::clone(&semaphore), token, &client, &mp, &path).await;
+            }
+            PageResult::Completed => break,
+        }
     }
 
     Ok(())
