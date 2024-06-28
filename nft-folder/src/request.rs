@@ -1,10 +1,12 @@
+use crate::download::download_image;
 use eyre::{eyre, Result};
 use futures::{stream, StreamExt};
+use indicatif::{MultiProgress, ProgressBar};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
-
-const DEBUG: bool = false;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
@@ -93,7 +95,7 @@ pub async fn fetch_page(
         r#"
             query NFTsForAddress {{
                 tokens(networks: [{{network: ETHEREUM, chain: MAINNET}}],
-                    pagination: {{limit: 2 {} }},
+                    pagination: {{limit: 20 {} }},
                     where: {{ownerAddresses: "{}"}}) {{
                         nodes {{
                             token {{
@@ -142,19 +144,18 @@ pub async fn fetch_page(
     let response_str = String::from_utf8(response_data)
         .map_err(|err| eyre!("Failed to convert response to string: {}", err))?;
 
-    let response: NftResponse = serde_json::from_str(&response_str).map_err(|err| {
-        // eprintln!("{}", &response_str);
-        eyre!("Failed to parse JSON response: {}", err)
-    })?;
+    let response: NftResponse = serde_json::from_str(&response_str)
+        .map_err(|err| eyre!("Failed to parse JSON response: {}", err))?;
+    // println!("{:?}", response);
 
     let data = response.handle_errors().unwrap();
     Ok(data.tokens)
 }
 
 pub async fn handle_processing(client: &Client, address: &str) -> eyre::Result<()> {
-    client: &'a Client,
-    address: &'a str,
-) -> impl Stream<Item = eyre::Result<NftToken>> + 'a {
+    let semaphore = Arc::new(Semaphore::new(4));
+    let mp = MultiProgress::new();
+
     let cursor = None;
     let requests = stream::unfold(cursor, move |cursor| async move {
         match fetch_page(&client, cursor, address).await {
@@ -178,8 +179,9 @@ pub async fn handle_processing(client: &Client, address: &str) -> eyre::Result<(
     .flatten();
     tokio::pin!(requests);
 
-    while let Some(data) = requests.next().await {
-        println!("{:#?}", data);
+    while let Some(token) = requests.next().await {
+        // let url = token.token_url.unwrap();
+        download_image(Arc::clone(&semaphore), token, &mp).await;
     }
 
     Ok(())

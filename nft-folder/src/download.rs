@@ -1,8 +1,10 @@
-use crate::request::{NftImage, NftNode};
+use crate::request::{NftImage, NftNode, NftToken};
 use base64::decode;
 use eyre::{eyre, Result};
 use futures::{stream::StreamExt, Stream};
 use reqwest::Client;
+use std::fmt::format;
+use std::sync::Arc;
 use std::{fs, io::Cursor, path::PathBuf, time::Duration};
 use std::{
     fs::File,
@@ -11,6 +13,43 @@ use std::{
 use tokio::{sync::mpsc, time::sleep};
 use tokio_util::bytes::Bytes;
 
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use tokio::sync::Semaphore;
+
+pub async fn download_image(semaphore: Arc<Semaphore>, data: NftToken, mp: &MultiProgress) {
+    // println!("==============================================");
+    // let mp = mp.clone();
+    let pb = mp.add(ProgressBar::new(100));
+    tokio::spawn(async move {
+        let permit = semaphore.acquire().await.unwrap();
+        // println!("{:#?}", data);
+
+        pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.magenta} {wide_msg} [{elapsed_precise:.bold.blue}] [{bar:40.yellow/}] {pos:>3}/{len} ({eta:>3})",
+            )
+            .unwrap()
+            .progress_chars("█▉▊▋▌▍▎▏  ")
+            .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶"])
+            );
+        let name = data.name.unwrap();
+        pb.set_message(format!("downloading {}", &name));
+        // println!("Get image {} on t:{t}", url);
+        // println!("starting download for {}", &name);
+        for i in 0..100 {
+            let r: u64 = ethers::core::rand::random::<u64>() / 60009360303000000;
+            std::thread::sleep(Duration::from_millis(r));
+            pb.set_position(i);
+            // println!("downloading {} | progress {i}%", &name);
+        }
+        // println!("url: {url}");
+        // println!("Downloaded {} on t:{t}", url);
+        pb.finish();
+        // println!("==============================================");
+        drop(permit); //`semaphore` dropped here while still borrowed
+    });
+}
+/*
 pub async fn test_progress(node: NftNode, progress_tx: mpsc::Sender<DownloadResult>) {
     let file_path = match node.token.name {
         Some(name) => name,
@@ -203,3 +242,4 @@ mod tests {
     }
         */
 }
+ */
