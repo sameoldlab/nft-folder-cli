@@ -24,18 +24,25 @@ pub async fn handle_token(
     dir: &PathBuf,
 ) -> Result<()> {
     let pb_style = ProgressStyle::with_template(
-            "{spinner:.magenta} {wide_msg} [{elapsed_precise:.bold.blue}] [{bar:40.yellow/}] {pos:>3}/{len} ({eta:>3})",
+            "{spinner:.magenta} {wide_msg} {pos:>3}/{len} [{bar:40.yellow/}] [{elapsed_precise:.bold.blue}]",
             )
             .unwrap()
             .progress_chars("█▉▊▋▌▍▎▏ ")
             .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶"]);
+    // let debug_style = ProgressStyle::with_template("{wide_msg}").unwrap();
 
     let image = token.image;
-    let name = match token.name {
-        Some(name) => name,
-        None => return Err(eyre!("Image data not found for {:#?}", token.token_id)),
-    };
-    let msg = format!("downloading {}", &name);
+    let name = if let Some(name) = token.name {
+        name
+    } else if let (Some(collection_name), Some(id)) = (&token.collection_name, &token.token_id) {
+        format!("{} #{}", collection_name, id)
+    } else {
+        return Err(eyre!("Image data not found for {:#?}", token.token_id));
+    }
+    .replace("/", " ")
+    .replace("\\", " ");
+
+    let msg = format!("{}", &name);
 
     let (url, mime) = match image {
         NftImage::Object {
@@ -46,14 +53,28 @@ pub async fn handle_token(
         NftImage::Url(url) => (url, None),
         _ => return Err(eyre!("No image URL found for {name}")),
     };
-
     let extension = if url.starts_with("data:image/svg") {
         "svg".to_string()
     } else if let Some(mime) = mime {
         mime.rsplit("/").next().unwrap_or_default().to_string()
+    } else if url.starts_with("ipfs") {
+        // This is probably not going to be an image, but let's take a shot and see what happens
+        // println!("{} {}", name, url);
+        "png".to_string()
+    } else if url.starts_with("ens") {
+        // println!("{} {}", name, url);
+        return Err(eyre!("{name} is not an image"));
     } else {
-        url.rsplit('.').next().unwrap_or_default().to_lowercase()
+        let ext = url.rsplit('.').next().unwrap_or_default().to_lowercase();
+        if ext.len() > 5 {
+            return Err(eyre!("No suitable extension found for {} {}", name, url));
+        } else {
+            ext
+        }
     };
+    // TODO: Timeout if download takes too long
+    // TODO: Maybe panic automatically on unrecognized file types
+    // TODO: Some SVGs seem to be having issues
 
     let file_path = dir.join(format!("{name}.{extension}"));
 
@@ -90,10 +111,11 @@ pub async fn handle_token(
 
         let url = if url.starts_with("ipfs") {
             // append IPFS gateway
-            let parts: Vec<&str> = url.split('/').collect();
-            let hash = parts.iter().find(|&&part| part.starts_with("Qm"));
+            let hash = url
+                .split('/')
+                .into_iter()
+                .find(|&part| part.starts_with("Qm"));
 
-            // Handle the case where the hash is not found
             match hash {
                 Some(hash) => format!("https://ipfs.io/ipfs/{}", hash),
                 None => {
@@ -128,18 +150,14 @@ pub async fn handle_token(
             drop(permit);
         });
     }
-
-    if DEBUG {
-        println!("{name} saved successfully");
-    }
     Ok(())
 }
 
 async fn download_image(
     client: &Client,
     image_url: &str,
-    file_path: PathBuf,
-    pb: &ProgressBar
+    file_path: &PathBuf,
+    pb: &ProgressBar,
 ) -> Result<()> {
     let response = client.get(image_url).send().await?;
     let content_length = response.content_length().unwrap_or(100);
