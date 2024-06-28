@@ -1,5 +1,5 @@
 use eyre::{eyre, Result};
-use futures::{stream, Stream, StreamExt};
+use futures::{stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
@@ -35,14 +35,14 @@ pub struct NftNode {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PageInfo {
-    end_cursor: Option<String>,
-    has_next_page: bool,
+    pub end_cursor: Option<String>,
+    pub has_next_page: bool,
     limit: i32,
 }
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct NftNodes {
     pub nodes: Vec<NftNode>,
-    #[serde(rename = "camelCase")]
     pub page_info: PageInfo,
 }
 #[derive(Serialize, Deserialize, Debug)]
@@ -62,27 +62,30 @@ struct ErrorLocation {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(untagged)]
-pub enum NftResponse {
-    Success { data: NftData },
-    Error { errors: FailedRequest },
+pub struct NftResponse {
+    data: Option<NftData>,
+    error: Option<FailedRequest>,
 }
 
 impl NftResponse {
     fn handle_errors(self) -> Option<NftData> {
-        match self {
-            NftResponse::Success { data } => Some(data),
-            NftResponse::Error { errors } => {
-                eprintln!("Errors: {:?}", errors);
+        match self.data {
+            Some(data) => Some(data),
+            None => {
+                eprintln!("Errors: {:?}", self.error);
                 None
             }
         }
     }
 }
 
-async fn fetch_page(client: &Client, cursor: Option<String>, address: &str) -> Result<NftNodes> {
+pub async fn fetch_page(
+    client: &Client,
+    cursor: Option<String>,
+    address: &str,
+) -> Result<NftNodes> {
     let cursor = match cursor {
-        Some(c) => format!(r#"after: "{}"""#, c),
+        Some(c) => format!(r#", after: "{}""#, c),
         None => "".to_owned(),
     };
 
@@ -90,7 +93,7 @@ async fn fetch_page(client: &Client, cursor: Option<String>, address: &str) -> R
         r#"
             query NFTsForAddress {{
                 tokens(networks: [{{network: ETHEREUM, chain: MAINNET}}],
-                    pagination: {{limit: 20, {} }},
+                    pagination: {{limit: 2 {} }},
                     where: {{ownerAddresses: "{}"}}) {{
                         nodes {{
                             token {{
@@ -145,41 +148,39 @@ async fn fetch_page(client: &Client, cursor: Option<String>, address: &str) -> R
     })?;
 
     let data = response.handle_errors().unwrap();
-
-
-    /*         if data.tokens.page_info.has_next_page == false {
-        let _ = sender.send(QueryResult::Finished);
-        drop(sender);
-        // return;
-    } else {
-        let _ = sender.send(QueryResult::Data(data.tokens.nodes));
-    } */
-
     Ok(data.tokens)
 }
 
-pub async fn request<'a>(
+pub async fn handle_processing(client: &Client, address: &str) -> eyre::Result<()> {
     client: &'a Client,
     address: &'a str,
 ) -> impl Stream<Item = eyre::Result<NftToken>> + 'a {
     let cursor = None;
-
-    stream::unfold(cursor, move |cursor| async move {
+    let requests = stream::unfold(cursor, move |cursor| async move {
         match fetch_page(&client, cursor, address).await {
             Ok(response) => {
-                println!("SUCCESS");
-                println!("SUCCESS");
-                println!("SUCCESS");
-                let items = stream::iter(response.nodes.into_iter().map(|node| Ok(node.token)));
+                let items = stream::iter(response.nodes.into_iter().map(|node| node.token));
                 let next_cursor = if response.page_info.has_next_page {
                     response.page_info.end_cursor
                 } else {
                     None
                 };
+                // Max 30 requests per min to public Zora API
+                std::thread::sleep(std::time::Duration::from_millis(2000));
                 Some((items, next_cursor))
             }
-            Err(_) => None,
+            Err(err) => {
+                eprintln!("Error fetching data: {}", err);
+                None
+            }
         }
     })
-    .flatten()
+    .flatten();
+    tokio::pin!(requests);
+
+    while let Some(data) = requests.next().await {
+        println!("{:#?}", data);
+    }
+
+    Ok(())
 }

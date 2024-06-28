@@ -1,10 +1,9 @@
 // mod download;
 mod request;
 
-use futures::StreamExt;
-use tokio::sync::{Semaphore, SemaphorePermit};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use request::request;
+use request::handle_processing;
+use reqwest::Client;
 
 fn download_image(url: &String, mp: &MultiProgress) {
 	println!("spawning thread");
@@ -31,36 +30,11 @@ fn download_image(url: &String, mp: &MultiProgress) {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (s, r) = futures::channel::mpsc::unbounded();
-
-    let mp = MultiProgress::new();
-
-		let receiver_stream = r.for_each(move |url| {
-			let mp = mp.clone();
-			tokio::spawn(async move {
-				while let Some(url) = &r.next().await {
-						download_image(url, &mp);
-				}
-		});
-		});
-
+async fn main() {
+    let client = Client::new();
     let address = "0x495f947276749Ce646f68AC8c248420045cb7b5e";
-    let client = reqwest::Client::new();
 
-    let stream = request(&client, &address).await;
-    tokio::pin!(stream);
-
-    while let Some(result) = stream.next().await {
-        let token = result?;
-				println!("received token: {:?}", token);
-        let url = token.token_url.unwrap();
-        if let Err(e) = s.unbounded_send(url) {
-            eprintln!("Error sending url to download task: {}", e);
-        }
+    if let Err(e) = handle_processing(&client, address).await {
+        println!("Error: {}", e);
     }
-
-    drop(s);
-
-    Ok(())
 }
