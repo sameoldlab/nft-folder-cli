@@ -1,81 +1,66 @@
-use crossbeam_channel::{bounded, unbounded, Sender};
-use crossbeam_utils::thread::scope;
-use ethers::core::rand::random;
-use std::{thread, time::Duration};
+// mod download;
+mod request;
 
-enum QueryResult {
-    Urls(Vec<String>),
-    Finished,
+use futures::StreamExt;
+use tokio::sync::{Semaphore, SemaphorePermit};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use request::request;
+
+fn download_image(url: &String, mp: &MultiProgress) {
+	println!("spawning thread");
+
+    let pb = mp.insert_from_back(0, ProgressBar::new(100));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.magenta} [{elapsed_precise:.bold.blue}] [{bar:40.yellow/}] {pos}/{len} ({eta})",
+        )
+        .unwrap()
+        .progress_chars("█▉▊▋▌▍▎▏  ")
+        .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶"])
+    );
+    // println!("Get image {} on t:{t}", url);
+    // thread::sleep(Duration::from_millis(r));
+    // for i in 0..100 {
+    //     let r: u64 = random::<u64>() / 600093603030000000;
+    //     thread::sleep(Duration::from_millis(r));
+    //     // pb.set_position(i);
+    // }
+    println!("url: {url}");
+    // println!("Downloaded {} on t:{t}", url);
+    pb.finish();
 }
 
-fn query_api(sender: Sender<QueryResult>, mut cursor: i32) {
-    if cursor == 0 {
-        let _ = sender.send(QueryResult::Finished);
-        drop(sender);
-        return;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let (s, r) = futures::channel::mpsc::unbounded();
+
+    let mp = MultiProgress::new();
+
+		let receiver_stream = r.for_each(move |url| {
+			let mp = mp.clone();
+			tokio::spawn(async move {
+				while let Some(url) = &r.next().await {
+						download_image(url, &mp);
+				}
+		});
+		});
+
+    let address = "0x495f947276749Ce646f68AC8c248420045cb7b5e";
+    let client = reqwest::Client::new();
+
+    let stream = request(&client, &address).await;
+    tokio::pin!(stream);
+
+    while let Some(result) = stream.next().await {
+        let token = result?;
+				println!("received token: {:?}", token);
+        let url = token.token_url.unwrap();
+        if let Err(e) = s.unbounded_send(url) {
+            eprintln!("Error sending url to download task: {}", e);
+        }
     }
 
-    let urls = vec![
-        "https://example.com/image1.jpg".to_owned(),
-        "https://example.com/image2.jpg".to_owned(),
-        "https://example.com/image3.jpg".to_owned(),
-        "https://example.com/image4.jpg".to_owned(),
-        "https://example.com/image5.jpg".to_owned(),
-        "https://example.com/image6.jpg".to_owned(),
-    ];
-    let r: u64 = random::<u64>() / 50093603030000000;
-    thread::sleep(Duration::from_millis(r));
-    println!("sending result");
-    let _ = sender.send(QueryResult::Urls(urls));
-
-    cursor -= 1;
-    query_api(sender, cursor);
-}
-
-fn download_image(url: String, t: i32) {
-    let r: u64 = random::<u64>() / 1009360303000000;
-
-    println!("Get image {} on t:{t}", url);
-    thread::sleep(Duration::from_millis(r));
-    println!("Downloaded {} on t:{t}", url);
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (sender, receiver) = unbounded();
-    let (task_sender, task_receiver) = unbounded();
-
-    let query_thread = thread::spawn(move || {
-        query_api(sender, 4);
-        
-    });
-
-    scope(|s| {
-        for t in 0..5 {
-            let task_receiver = task_receiver.clone();
-            s.spawn(move |_| {
-                for url in task_receiver {
-                    download_image(url, t);
-                }
-            });
-        }
-
-        for task in receiver {
-            match task {
-                QueryResult::Urls(task) => {
-                    for url in task {
-                        let _ = task_sender.send(url);
-                    }
-                }
-                QueryResult::Finished => {
-                    drop(task_sender); 
-                    break;
-                }
-            }
-        }
-    })
-    .unwrap();
-
-    query_thread.join().unwrap();
+    drop(s);
 
     Ok(())
 }

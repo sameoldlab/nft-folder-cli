@@ -1,9 +1,11 @@
 use eyre::{eyre, Result};
+use futures::{stream, Stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
 
 const DEBUG: bool = false;
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 #[serde(rename_all = "camelCase")]
@@ -33,20 +35,19 @@ pub struct NftNode {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PageInfo {
-    end_cursor: String,
+    end_cursor: Option<String>,
     has_next_page: bool,
     limit: i32,
 }
-
 #[derive(Serialize, Deserialize, Debug)]
-pub struct NftTokens {
+pub struct NftNodes {
     pub nodes: Vec<NftNode>,
     #[serde(rename = "camelCase")]
     pub page_info: PageInfo,
 }
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NftData {
-    pub tokens: NftTokens,
+    pub tokens: NftNodes,
 }
 #[derive(Deserialize, Serialize, Debug)]
 pub struct FailedRequest {
@@ -72,76 +73,113 @@ impl NftResponse {
         match self {
             NftResponse::Success { data } => Some(data),
             NftResponse::Error { errors } => {
-                println!("Errors: {:?}", errors);
+                eprintln!("Errors: {:?}", errors);
                 None
             }
         }
     }
+}
 
-    pub async fn request(address: &str) -> Result<NftData> {
-        let query = format!(
-            r#"
-		query NFTsForAddress {{
-			tokens(networks: [{{network: ETHEREUM, chain: MAINNET}}],
-						pagination: {{limit: 32}},
-						where: {{ownerAddresses: "{}"}}) {{
-				nodes {{
-					token {{
-						tokenId
-						tokenUrl
-						collectionName
-						name
-						image {{
-							url
-							size
-							mimeType
-						}}
-						metadata
-					}}
-					pageInfo {{
-					    endCursor
-					    hasNextPage
-					    limit
-					}}
-				}}
-			}}
-		}}
-		"#,
-            address
-        );
+async fn fetch_page(client: &Client, cursor: Option<String>, address: &str) -> Result<NftNodes> {
+    let cursor = match cursor {
+        Some(c) => format!(r#"after: "{}"""#, c),
+        None => "".to_owned(),
+    };
 
-        let request_body = to_value(serde_json::json!({
+    let query = format!(
+        r#"
+            query NFTsForAddress {{
+                tokens(networks: [{{network: ETHEREUM, chain: MAINNET}}],
+                    pagination: {{limit: 20, {} }},
+                    where: {{ownerAddresses: "{}"}}) {{
+                        nodes {{
+                            token {{
+                                tokenId
+                                    tokenUrl
+                                    collectionName
+                                    name
+                                    image {{
+                                        url
+                                        size
+                                        mimeType
+                                    }}
+                                    metadata
+                            }}
+                        }}
+                        pageInfo {{
+                            endCursor
+                            hasNextPage
+                            limit
+                        }}
+                    }}
+                }}
+            "#,
+        cursor, address
+    );
+
+    let request_body = to_value(serde_json::json!({
                         "query": query,
                         "variables": null,
-        }))?;
+    }))?;
 
-        let response = Client::new()
-            .post("https://api.zora.co/graphql")
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|err| eyre!("Failed to send request: {}", err))?;
-        let mut response_body = response.bytes_stream();
+    let response = client
+        .post("https://api.zora.co/graphql")
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|err| eyre!("Failed to send request: {}", err))?;
+    let mut response_body = response.bytes_stream();
 
-        let mut response_data = Vec::new();
-        while let Some(item) = futures::StreamExt::next(&mut response_body).await {
-            let chunk = item.map_err(|err| eyre!("Failed to read response: {}", err))?;
-            response_data.extend_from_slice(&chunk);
-        }
-
-        let response_str = String::from_utf8(response_data)
-            .map_err(|err| eyre!("Failed to convert response to string: {}", err))?;
-        if DEBUG {
-            println!("{}", &response_str);
-        }
-        let response: NftResponse = serde_json::from_str(&response_str)
-            .map_err(|err| eyre!("Failed to parse JSON response: {}", err))?;
-
-        let data = response.handle_errors().unwrap();
-        if DEBUG {
-            println!("{:#?}", &data);
-        }
-
-        Ok(data)
+    let mut response_data = Vec::new();
+    while let Some(item) = futures::StreamExt::next(&mut response_body).await {
+        let chunk = item.map_err(|err| eyre!("Failed to read response: {}", err))?;
+        response_data.extend_from_slice(&chunk);
     }
+
+    let response_str = String::from_utf8(response_data)
+        .map_err(|err| eyre!("Failed to convert response to string: {}", err))?;
+
+    let response: NftResponse = serde_json::from_str(&response_str).map_err(|err| {
+        // eprintln!("{}", &response_str);
+        eyre!("Failed to parse JSON response: {}", err)
+    })?;
+
+    let data = response.handle_errors().unwrap();
+
+
+    /*         if data.tokens.page_info.has_next_page == false {
+        let _ = sender.send(QueryResult::Finished);
+        drop(sender);
+        // return;
+    } else {
+        let _ = sender.send(QueryResult::Data(data.tokens.nodes));
+    } */
+
+    Ok(data.tokens)
+}
+
+pub async fn request<'a>(
+    client: &'a Client,
+    address: &'a str,
+) -> impl Stream<Item = eyre::Result<NftToken>> + 'a {
+    let cursor = None;
+
+    stream::unfold(cursor, move |cursor| async move {
+        match fetch_page(&client, cursor, address).await {
+            Ok(response) => {
+                println!("SUCCESS");
+                println!("SUCCESS");
+                println!("SUCCESS");
+                let items = stream::iter(response.nodes.into_iter().map(|node| Ok(node.token)));
+                let next_cursor = if response.page_info.has_next_page {
+                    response.page_info.end_cursor
+                } else {
+                    None
+                };
+                Some((items, next_cursor))
+            }
+            Err(_) => None,
+        }
+    })
+    .flatten()
 }
