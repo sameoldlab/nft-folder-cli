@@ -2,7 +2,7 @@ use crate::download::handle_token;
 use eyre::{eyre, Result};
 use futures::{stream, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use reqwest::Client;
+use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
 use std::{path::PathBuf, sync::Arc};
@@ -64,35 +64,26 @@ struct ErrorLocation {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct NftResponse {
+pub struct ZoraRequest {
     data: Option<NftData>,
     error: Option<FailedRequest>,
 }
 
-impl NftResponse {
-    fn handle_errors(self) -> Option<NftData> {
-        match self.data {
-            Some(data) => Some(data),
-            None => {
-                eprintln!("Errors: {:?}", self.error);
-                None
-            }
-        }
-    }
-}
+impl ZoraRequest {
+    const API: &'static str = "https://api.zora.co/graphql";
 
-pub async fn fetch_page(
-    client: &Client,
-    cursor: Option<String>,
-    address: &str,
-) -> Result<NftNodes> {
-    let cursor = match cursor {
-        Some(c) => format!(r#", after: "{}""#, c),
-        None => "".to_owned(),
-    };
+    async fn send(
+        client: &Client,
+        cursor: Option<String>,
+        address: &str,
+    ) -> Result<Response, reqwest::Error> {
+        let cursor = match cursor {
+            Some(c) => format!(r#", after: "{}""#, c),
+            None => "".to_owned(),
+        };
 
-    let query = format!(
-        r#"
+        let query = format!(
+            r#"
             query NFTsForAddress {{
                 tokens(networks: [{{network: ETHEREUM, chain: MAINNET}}],
                     pagination: {{limit: 20 {} }},
@@ -118,24 +109,35 @@ pub async fn fetch_page(
                     }}
                 }}
             "#,
-        cursor, address
-    );
+            cursor, address
+        );
 
-    let request_body = to_value(serde_json::json!({
-                        "query": query,
-                        "variables": null,
-    }))?;
+        let request_body = to_value(serde_json::json!({
+            "query": query,
+            "variables": null,
+        }))
+        .unwrap();
 
-    let response = client
-        .post("https://api.zora.co/graphql")
-        .json(&request_body)
-        .send()
+        client
+            .post(ZoraRequest::API)
+            .json(&request_body)
+            .send()
+            .await
+    }
+}
+
+pub async fn fetch_page(
+    client: &Client,
+    cursor: Option<String>,
+    address: &str,
+) -> Result<NftNodes> {
+    let response = ZoraRequest::send(client, cursor, address)
         .await
         .map_err(|err| eyre!("Failed to send request: {}", err))?;
     let mut response_body = response.bytes_stream();
 
     let mut response_data = Vec::new();
-    while let Some(item) = futures::StreamExt::next(&mut response_body).await {
+    while let Some(item) = StreamExt::next(&mut response_body).await {
         let chunk = item.map_err(|err| eyre!("Failed to read response: {}", err))?;
         response_data.extend_from_slice(&chunk);
     }
@@ -143,12 +145,14 @@ pub async fn fetch_page(
     let response_str = String::from_utf8(response_data)
         .map_err(|err| eyre!("Failed to convert response to string: {}", err))?;
 
-    let response: NftResponse = serde_json::from_str(&response_str)
+    let response: ZoraRequest = serde_json::from_str(&response_str)
         .map_err(|err| eyre!("Failed to parse JSON response: {}", err))?;
-    // println!("{:?}", response);
 
-    let data = response.handle_errors().unwrap();
-    Ok(data.tokens)
+    if let Some(data) = response.data {
+        Ok(data.tokens)
+    } else {
+        Err(eyre!("Errors: {:?}", response.error))
+    }
 }
 
 enum PageResult {
