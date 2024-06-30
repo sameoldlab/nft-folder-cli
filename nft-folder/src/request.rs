@@ -155,10 +155,7 @@ enum PageResult {
     Data(NftToken),
     Completed,
 }
-pub async fn handle_processing(client: &Client, address: &str, path: PathBuf) -> eyre::Result<()> {
-    let semaphore = Arc::new(Semaphore::new(4));
-    let mp = MultiProgress::new();
-
+pub async fn handle_processing(client: &Client, address: &str, path: PathBuf, max: usize) -> eyre::Result<()> {
     let cursor = None;
     let requests = stream::unfold(cursor, move |cursor| async move {
         match fetch_page(&client, cursor, address).await {
@@ -188,16 +185,18 @@ pub async fn handle_processing(client: &Client, address: &str, path: PathBuf) ->
     .flatten();
     tokio::pin!(requests);
 
+    let semaphore = Arc::new(Semaphore::new(max));
+    let mp = MultiProgress::new();
 
     mp.set_alignment(indicatif::MultiProgressAlignment::Bottom);
     let total_pb = mp.add(ProgressBar::new(0));
     total_pb.set_style(ProgressStyle::with_template(
-        "{spinner:.magenta} {pos:>3.bold.blue} of {len:>3.bold.blue} {msg}",
+        "Found: {len:>3.bold.blue}  Saved: {pos:>3.bold.blue} {msg}",
         )
         .unwrap()
         .progress_chars("█▉▊▋▌▍▎▏ "));
         // .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶"]));
-    total_pb.set_message("Complete");
+    // total_pb.set_message("Complete");
     
 
     while let Some(token) = requests.next().await {
@@ -216,7 +215,8 @@ pub async fn handle_processing(client: &Client, address: &str, path: PathBuf) ->
                 }
             }
             PageResult::Completed => {
-                total_pb.abandon_with_message("Completed Sucessfully");
+                // total_pb.abandon_with_message("Completed Sucessfully");
+                total_pb.abandon();
                 return Ok(())
             },
         }

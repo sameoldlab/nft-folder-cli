@@ -23,12 +23,14 @@ pub async fn handle_token(
     mp: &MultiProgress,
     dir: &PathBuf,
 ) -> Result<()> {
+
+    // "{wide_msg} {pos:>7}/{len:7} {bar.cyan/blue} {percent}",
     let pb_style = ProgressStyle::with_template(
-            "{spinner:.magenta} {wide_msg} {pos:>3}/{len} [{bar:40.yellow/}] [{elapsed_precise:.bold.blue}]",
+            "{spinner:.magenta} {wide_msg} {pos:>3}/{len} [{bar:40.yellow}] [{elapsed_precise:.bold.blue}]",
             )
             .unwrap()
             .progress_chars("█▉▊▋▌▍▎▏ ")
-            .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶"]);
+            .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶", "⣿"]);
     // let debug_style = ProgressStyle::with_template("{wide_msg}").unwrap();
 
     let image = token.image;
@@ -187,30 +189,28 @@ async fn download_image(
     Ok(())
 }
 
-pub async fn create_directory(dir_path: &PathBuf) -> Result<PathBuf> {
-    let res = match fs::metadata(dir_path) {
+pub async fn create_directory(dir_path: PathBuf) -> Result<PathBuf> {
+	let copy = dir_path.clone();
+    match fs::metadata(copy) {
         Ok(metadata) => {
             if !metadata.is_dir() {
-                return Err(io::Error::new(
+                Err(io::Error::new(
                     ErrorKind::InvalidInput,
                     format!("{:?} is not a directory", dir_path),
                 )
-                .into());
+                .into())
+            } else {
+                Ok(dir_path)
             }
-            dir_path.to_path_buf()
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            fs::create_dir_all(dir_path)?;
-            if DEBUG {
-                println!("created directory: {:?}", dir_path);
-            }
-            dir_path.to_path_buf()
+            fs::create_dir_all(&dir_path)?;
+            Ok(dir_path)
         }
         Err(e) => {
-            return Err(e.into());
+            Err(e.into())
         }
-    };
-    Ok(res)
+    }
 }
 
 fn decode_and_save(base64_data: &str, file_path: PathBuf) -> Result<()> {
