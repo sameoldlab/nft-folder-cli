@@ -1,6 +1,6 @@
 [package]
 name = "nft-folder"
-version = "0.2.1"
+version = "0.3.1"
 edition = "2021"
 authors = ["ibro <sameoldlab@proton.me>"]
 license = "MIT OR Apache-2.0"
