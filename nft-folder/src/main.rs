@@ -4,7 +4,7 @@ mod request;
 use download::create_directory;
 use request::handle_processing;
 
-use ::core::time;
+use ::core::time::Duration;
 use clap::{Args, Parser, Subcommand};
 use console::style;
 use ethers::utils::hex::encode;
@@ -12,7 +12,6 @@ use ethers_providers::{Http, Middleware, Provider};
 use eyre::Result;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use reqwest::Client;
-use std::borrow::Borrow;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -26,7 +25,6 @@ struct Cli {
 enum Commands {
     /// Create a folder for the provided address
     Create(CreateArgs),
-    Test,
 }
 
 #[derive(Args)]
@@ -110,30 +108,6 @@ async fn main() -> Result<()> {
             */
             Ok(())
         }
-
-        Commands::Test => {
-            let nodes = vec![
-                "first".to_string(),
-                "second".to_string(),
-                "third".to_string(),
-                "fourth node".to_string(),
-            ];
-
-            // indicatif Multiprogress
-            // Tracks total progress of nodes
-            let multi_pb = MultiProgress::new();
-            let multi_pb = multi_pb.borrow();
-            let total_pb = multi_pb.add(ProgressBar::new(nodes.len().try_into()?));
-            total_pb.set_style(
-                ProgressStyle::with_template(
-                    "Total [{pos:>}/{len:>}] {elapsed:>} {bar:40} {percent:>3}% ",
-                )
-                .unwrap()
-                .progress_chars("█░ "),
-            );
-
-            Ok(())
-        }
     }
 }
 
@@ -152,7 +126,7 @@ fn pending(multi_pb: &MultiProgress, msg: String) -> ProgressBar {
     let spinner = multi_pb.add(ProgressBar::new_spinner().with_style(style));
     spinner.set_prefix("INFO");
     spinner.set_message(msg);
-    spinner.enable_steady_tick(time::Duration::from_millis(100));
+    spinner.enable_steady_tick(Duration::from_millis(100));
 
     spinner
 }
