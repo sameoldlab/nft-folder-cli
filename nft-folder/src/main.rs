@@ -5,6 +5,7 @@ use download::create_directory;
 use request::handle_processing;
 
 use ::core::time::Duration;
+use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 use console::style;
 use ethers::utils::hex::encode;
@@ -33,8 +34,8 @@ struct CreateArgs {
     address: String,
 
     /// directory to create nft folder
-    #[arg(short, long, default_value = "./test")]
-    path: std::path::PathBuf,
+    #[arg(short, long)]
+    path: Option<PathBuf>,
 
     /// maximum number of parallel downloads
     #[arg(short, long = "max", default_value_t = 5)]
@@ -80,19 +81,25 @@ async fn main() -> Result<()> {
                 }
             };                  
 
-            let path = match account.name {
-                Some(name) => {
-                    let spinner = pending(&multi_pb, format!("Saving files to {}", name));
-                    match create_directory(args.path.join(name)).await {
-                        Ok(path) => {
-                            spinner.finish();
-                            path
-                        },
-                        Err(err) => return Err(eyre::eyre!("{} {err}", style("Invalid Path").red())),
-                    }
-                }
-                None => args.path.join(&account.address),
+			let mut path = args.path
+				.map(PathBuf::from)
+				.or_else(|| dirs::picture_dir())
+				.unwrap_or_else(|| PathBuf::from("."));
+			path.push("nft-folder");
+
+            path = match account.name {
+                Some(name) => path.join(name),
+                None => path.join(&account.address),
             };
+
+			let spinner = pending(&multi_pb, format!("Saving files to {}", path.to_string_lossy()));
+			path = match create_directory(path).await {
+				Ok(path) => {
+					spinner.finish();
+					path
+				},
+				Err(err) => return Err(eyre::eyre!("{} {err}", style("Invalid Path").red())),
+			};
 
             let client = Client::new();
             if let Err(e) = handle_processing(&client, account.address.as_str(), path, args.max_concurrent_downloads).await {
@@ -100,9 +107,6 @@ async fn main() -> Result<()> {
             };
 
             /*
-               :: (1/6) ENS Name Detected. Resolving name
-               :: (2/6) Name resolved to 0x21B0...42fa
-               :: (3/6) Saving files to name.eth
                :: (4/6) Requesting NFT Data
                :: (5/6) 45 NFTs found. Starting download
             */

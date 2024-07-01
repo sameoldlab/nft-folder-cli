@@ -1881,6 +1881,7 @@ dependencies = [
  "base64 0.13.1",
  "clap",
  "console",
+ "dirs",
  "ethers",
  "ethers-providers",
  "eyre",
