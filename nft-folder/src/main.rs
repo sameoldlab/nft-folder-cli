@@ -56,14 +56,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Create(args) => {
-
             let multi_pb = MultiProgress::new();
             let provider = Provider::<Http>::try_from(args.rpc)?;
             let account = match args.address {
                 arg if arg.split(".").last().unwrap() == "eth" => {
-                    let spinner = pending(&multi_pb, "ENS Detected. Resolving address...".to_string());
+                    let spinner =
+                        pending(&multi_pb, "ENS Detected. Resolving address...".to_string());
                     let address = resolve_ens_name(&arg, provider).await?;
-                    spinner.finish_with_message(format!("Name Resolved to {address}"));                    
+                    spinner.finish_with_message(format!("Name Resolved to {address}"));
                     Account {
                         name: Some(arg.to_string()),
                         address,
@@ -79,27 +79,31 @@ async fn main() -> Result<()> {
                         style("Invalid address").red()
                     ))
                 }
-            };                  
+            };
 
-			let mut path = args.path
-				.map(PathBuf::from)
-				.or_else(|| dirs::picture_dir())
-				.unwrap_or_else(|| PathBuf::from("."));
-			path.push("nft-folder");
+            let mut path = args
+                .path
+                .map(PathBuf::from)
+                .or_else(|| dirs::picture_dir())
+                .unwrap_or_else(|| PathBuf::from("."));
+            path.push("nft-folder");
 
             path = match account.name {
                 Some(name) => path.join(name),
                 None => path.join(&account.address),
             };
 
-			let spinner = pending(&multi_pb, format!("Saving files to {}", path.to_string_lossy()));
-			path = match create_directory(path).await {
-				Ok(path) => {
-					spinner.finish();
-					path
-				},
-				Err(err) => return Err(eyre::eyre!("{} {err}", style("Invalid Path").red())),
-			};
+            let spinner = pending(
+                &multi_pb,
+                format!("Saving files to {}", path.to_string_lossy()),
+            );
+            path = match create_directory(path).await {
+                Ok(path) => {
+                    spinner.finish();
+                    path
+                }
+                Err(err) => return Err(eyre::eyre!("{} {err}", style("Invalid Path").red())),
+            };
 
             let client = Client::new();
             if let Err(e) = handle_processing(&client, account.address.as_str(), path, args.max_concurrent_downloads).await {
