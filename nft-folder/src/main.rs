@@ -106,9 +106,13 @@ async fn main() -> Result<()> {
             };
 
             let client = Client::new();
-            if let Err(e) = handle_processing(&client, account.address.as_str(), path, args.max_concurrent_downloads).await {
-                println!("Error: {}", e);
-            };
+            handle_processing(
+                &client,
+                account.address.as_str(),
+                path,
+                args.max_concurrent_downloads,
+            )
+            .await?;
 
             /*
                :: (4/6) Requesting NFT Data

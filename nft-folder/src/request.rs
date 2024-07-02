@@ -1,12 +1,12 @@
 use crate::download::handle_token;
-use eyre::{eyre, Result};
+use eyre::{eyre, Report, Result};
 use futures::{stream, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use reqwest::{Client, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::to_value;
 use std::{path::PathBuf, sync::Arc};
-use tokio::sync::Semaphore;
+use tokio::{sync::Semaphore, task::JoinSet};
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
@@ -130,7 +130,7 @@ pub async fn fetch_page(
     client: &Client,
     cursor: Option<String>,
     address: &str,
-) -> Result<NftNodes> {
+) -> Result<Option<NftNodes>> {
     let response = ZoraRequest::send(client, cursor, address)
         .await
         .map_err(|err| eyre!("Failed to send request: {}", err))?;
@@ -149,39 +149,37 @@ pub async fn fetch_page(
         .map_err(|err| eyre!("Failed to parse JSON response: {}", err))?;
 
     if let Some(data) = response.data {
-        Ok(data.tokens)
+        Ok(Some(data.tokens))
+    } else if let Some(error) = response.error {
+        Err(eyre!("Errors: {:?}", error))
     } else {
-        Err(eyre!("Errors: {:?}", response.error))
+        Ok(None)
     }
 }
 
-enum PageResult {
-    Data(NftToken),
-    Completed,
-}
-pub async fn handle_processing(client: &Client, address: &str, path: PathBuf, max: usize) -> eyre::Result<()> {
+pub async fn handle_processing(
+    client: &Client,
+    address: &str,
+    path: PathBuf,
+    max: usize,
+) -> eyre::Result<()> {
     let cursor = None;
     let requests = stream::unfold(cursor, move |cursor| async move {
         match fetch_page(&client, cursor, address).await {
-            Ok(response) => {
-                let items = stream::iter(response.nodes.into_iter().map(move |node| {
-                    if response.page_info.has_next_page {
-                        PageResult::Data(node.token)
-                    } else {
-                        PageResult::Completed
-                    }
-                }));
-                let next_cursor = if response.page_info.has_next_page {
-                    response.page_info.end_cursor
+            Ok(Some(response)) => {
+                if !response.nodes.is_empty() {
+                    let items = stream::iter(response.nodes.into_iter().map(|node| node.token));
+                    let next_cursor = response.page_info.end_cursor;
+                    // Max 30 requests per min to public Zora API, but doesn't kick in below 6000 (30*200) tokens
+                    // std::thread::sleep(std::time::Duration::from_millis(2000));
+                    Some((items, next_cursor))
                 } else {
                     None
-                };
-                // Max 30 requests per min to public Zora API
-                std::thread::sleep(std::time::Duration::from_millis(2000));
-                Some((items, next_cursor))
+                }
             }
+            Ok(None) => None,
             Err(err) => {
-                eprintln!("Error fetching data: {}", err);
+                println!("Error fetching data: {}", err);
                 None
             }
         }
@@ -198,32 +196,40 @@ pub async fn handle_processing(client: &Client, address: &str, path: PathBuf, ma
         "Found: {len:>3.bold.blue}  Saved: {pos:>3.bold.blue} {msg}",
         )
         .unwrap()
-        .progress_chars("█▉▊▋▌▍▎▏ "));
-        // .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶"]));
-    // total_pb.set_message("Complete");
-    
+
+    let semaphore = Arc::new(Semaphore::new(max));
+    let mut errors: Vec<Report> = vec![];
+    let mut set = JoinSet::new();
 
     while let Some(token) = requests.next().await {
         total_pb.inc_length(1);
-        // let url = token.token_url.unwrap();
-        match token {
-            PageResult::Data(token) => {
-                // println!("Sending {:?}", token.name);
-                match handle_token(Arc::clone(&semaphore), token, &client, &mp, &path).await {
-                    Ok(()) => {
-                        total_pb.inc(1);
-                    }
-                    Err(err) => {
-                        total_pb.println(format!("{}", err));
-                    }
-                }
+        match handle_token(Arc::clone(&semaphore), token, &client, &mp, &path) {
+            Ok(Some(task)) => {
+                set.spawn(task);
             }
-            PageResult::Completed => {
-                // total_pb.abandon_with_message("Completed Sucessfully");
-                total_pb.abandon();
-                return Ok(())
-            },
+            Ok(None) => total_pb.inc(1),
+            Err(err) => errors.push(err),
         }
     }
+
+    while let Some(tasks) = set.join_next().await {
+        let tasks = tasks.unwrap();
+        match tasks.unwrap() {
+            Ok(_) => {
+                total_pb.inc(1);
+            }
+            Err(err) => {
+                errors.push(err);
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        total_pb.finish_with_message("Completed all sucessfully");
+    } else {
+        total_pb.abandon();
+        errors.iter().for_each(|e| println!("{}", e))
+    }
+
     Ok(())
 }

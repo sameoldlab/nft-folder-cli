@@ -4,6 +4,7 @@ use base64::decode;
 use eyre::{eyre, Result};
 use futures::stream::StreamExt;
 use reqwest::Client;
+use tokio::task::JoinHandle;
 use std::sync::Arc;
 use std::{fs, path::PathBuf};
 use std::{
@@ -22,15 +23,7 @@ pub async fn handle_token(
     client: &Client,
     mp: &MultiProgress,
     dir: &PathBuf,
-) -> Result<()> {
-
-    // "{wide_msg} {pos:>7}/{len:7} {bar.cyan/blue} {percent}",
-    let pb_style = ProgressStyle::with_template(
-            "{spinner:.magenta} {wide_msg} {pos:>3}/{len} [{bar:40.yellow}] [{elapsed_precise:.bold.blue}]",
-            )
-            .unwrap()
-            .progress_chars("█▉▊▋▌▍▎▏ ")
-            .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶", "⣿"]);
+) -> Result<Option<JoinHandle<Result<()>>>> {
     // let debug_style = ProgressStyle::with_template("{wide_msg}").unwrap();
 
     let image = token.image;
@@ -43,8 +36,6 @@ pub async fn handle_token(
     }
     .replace("/", " ")
     .replace("\\", " ");
-
-    let msg = format!("{}", &name);
 
     let (url, mime) = match image {
         NftImage::Object {
@@ -130,29 +121,29 @@ pub async fn handle_token(
             url.to_owned()
         };
 
-        let client = client.clone();
+    let client = client.clone();
+    let handle = tokio::spawn(async move {
+        let permit = semaphore.acquire_owned().await.unwrap();
 
-        tokio::spawn(async move {
-            // pb.set_position(i);
-            match download_image(&client, &url, &file_path, &pb).await {
-                Ok(()) => {
-                    pb.finish_with_message(format!("Completed {name}"));
+        // pb.set_position(i);
+        let result = match download_image(&client, &url, &file_path, &pb).await {
+            Ok(()) => {
+                pb.set_prefix(format!(
+                    "{}",
+                    style("SAVED").fg(console::Color::Green)));
+                pb.finish_with_message(format!("{name}"));
+                Ok(())
+            }
+            Err(error) => {
+                pb.abandon_with_message(format!("{name}.{extension}: {error}"));
+                Err(eyre::eyre!("Error downloading image {}: {}", name, error))
+            }
+        };
 
-                    // Ok(())
-                }
-                Err(error) => {
-                    pb.abandon_with_message(format!(
-                        "Download failed: {} to {:?}. {}",
-                        name, file_path, error
-                    ));
-                    // return Err(eyre::eyre!("Error downloading image {}: {}", name, error));
-                }
-            };
-
-            drop(permit);
-        });
-    }
-    Ok(())
+        drop(permit);
+        result
+    });
+    Ok(Some(handle))
 }
 
 async fn download_image(
@@ -162,35 +153,26 @@ async fn download_image(
     pb: &ProgressBar,
 ) -> Result<()> {
     let response = client.get(image_url).send().await?;
-    let content_length = response.content_length().unwrap_or(100);
+    let content_length = response.content_length().unwrap_or(0);
     let mut byte_stream = response.bytes_stream();
     pb.set_length(content_length);
 
-    let mut progress: u64 = 0;
+    // TODO: Check for an extension or get one from the header here
     let mut file = File::create(file_path)?;
 
     while let Some(chunk) = byte_stream.next().await {
         let chunk = chunk?;
-        let chunk_len = chunk.len();
-
-        progress += chunk_len as u64;
         file.write_all(&chunk)
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
-        pb.set_position(progress);
-    }
-
-    if content_length != progress {
-        return Err(eyre::eyre!(
-            "Downloaded file size does not match the expected size"
-        ));
+        pb.inc(chunk.len() as u64);
     }
 
     Ok(())
 }
 
 pub async fn create_directory(dir_path: PathBuf) -> Result<PathBuf> {
-	let copy = dir_path.clone();
+    let copy = dir_path.clone();
     match fs::metadata(copy) {
         Ok(metadata) => {
             if !metadata.is_dir() {
@@ -207,9 +189,7 @@ pub async fn create_directory(dir_path: PathBuf) -> Result<PathBuf> {
             fs::create_dir_all(&dir_path)?;
             Ok(dir_path)
         }
-        Err(e) => {
-            Err(e.into())
-        }
+        Err(e) => Err(e.into()),
     }
 }
 
