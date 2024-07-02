@@ -86,7 +86,7 @@ impl ZoraRequest {
             r#"
             query NFTsForAddress {{
                 tokens(networks: [{{network: ETHEREUM, chain: MAINNET}}],
-                    pagination: {{limit: 20 {} }},
+                    pagination: {{limit: 200 {} }},
                     where: {{ownerAddresses: "{}"}}) {{
                         nodes {{
                             token {{
