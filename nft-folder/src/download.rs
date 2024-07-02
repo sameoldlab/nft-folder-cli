@@ -1,6 +1,7 @@
 use crate::request::{NftImage, NftToken};
 
 use base64::decode;
+use console::style;
 use eyre::{eyre, Result};
 use futures::stream::StreamExt;
 use reqwest::Client;
@@ -16,8 +17,17 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio::sync::Semaphore;
 
 const DEBUG: bool = false;
+const INSTANT_TEMPLATE: &str = "{spinner:.green} {prefix:.bold.green} {wide_msg:!}";
+const BYTE_TEMPLATE: &str = "{spinner:.green} {prefix:.bold.black} {wide_msg:!} {decimal_bytes} / {decimal_total_bytes} {bar:30.yellow/.on_black.white.dim} [{duration_precise:.bold.blue}]";
 
-pub async fn handle_token(
+fn pb_style(template: &str) -> ProgressStyle {
+    ProgressStyle::with_template(template)
+        .unwrap()
+        .progress_chars("█▓▒░░░")
+        .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶", "⣿"])
+}
+
+pub fn handle_token(
     semaphore: Arc<Semaphore>,
     token: NftToken,
     client: &Client,
@@ -70,56 +80,68 @@ pub async fn handle_token(
     // TODO: Some SVGs seem to be having issues
 
     let file_path = dir.join(format!("{name}.{extension}"));
+    let msg = name.clone();
 
+    // TODO: Does not verify if file was saved correctly. Will skip over partially downloaded files
     if file_path.is_file() {
         let pb = mp.insert(
             0,
-            ProgressBar::new(100).with_message(msg).with_style(pb_style),
+            ProgressBar::new(100)
+                .with_message(msg)
+                .with_style(pb_style(INSTANT_TEMPLATE)),
         );
-        pb.finish_with_message(format!("Already saved {name}"));
-        return Ok(());
+        pb.set_prefix("SKIPPED");
+        pb.finish_with_message(format!("{name}"));
+        return Ok(None);
     }
-
-    if DEBUG {
-        println!("Downloading {name} to {:?}", file_path);
-    }
-
+    // SVG is included in response. Save and return
     if url.starts_with("data:image/svg") {
         let pb = mp.insert(
             0,
-            ProgressBar::new(100).with_message(msg).with_style(pb_style),
+            ProgressBar::new(100)
+                .with_message(msg)
+                .with_style(pb_style(INSTANT_TEMPLATE)),
         );
         decode_and_save(
             &url.strip_prefix("data:image/svg+xml;base64,")
                 .unwrap_or(&url),
             file_path,
         )?;
+        pb.set_prefix("SAVED");
         pb.finish();
-    } else {
-        let permit = semaphore.acquire_owned().await.unwrap();
-        let pb = mp.insert(
-            0,
-            ProgressBar::new(100).with_message(msg).with_style(pb_style),
-        );
+        return Ok(None);
+    }
 
-        let url = if url.starts_with("ipfs") {
-            // append IPFS gateway
-            let hash = url
-                .split('/')
-                .into_iter()
-                .find(|&part| part.starts_with("Qm"));
+    if DEBUG {
+        println!("Downloading {name} to {:?}", file_path);
+    }
 
-            match hash {
-                Some(hash) => format!("https://ipfs.io/ipfs/{}", hash),
-                None => {
-                    // Handle the case where the hash is not found
-                    pb.abandon_with_message(format!("IPFS hash not found in URL for {name}"));
-                    return Err(eyre::eyre!("IPFS hash not found in URL"));
-                }
+    let pb = mp.insert(
+        0,
+        ProgressBar::new(100)
+            .with_message(msg)
+            .with_style(pb_style(BYTE_TEMPLATE)),
+    );
+
+    let url = if url.starts_with("ipfs") {
+        // append IPFS gateway
+        let hash = url
+            .split('/')
+            .into_iter()
+            .find(|&part| part.starts_with("Qm"));
+
+        match hash {
+            Some(hash) => format!("https://ipfs.io/ipfs/{}", hash),
+            None => {
+                // Handle the case where the hash is not found
+                pb.set_prefix(format!("{}", style("FAILED").fg(console::Color::Red)));
+                pb.abandon_with_message(format!("IPFS hash not found in URL for {name}"));
+                return Err(eyre::eyre!("IPFS hash not found in URL"));
             }
-        } else {
-            url.to_owned()
-        };
+        }
+    } else {
+        url.to_owned()
+    };
 
     let client = client.clone();
     let handle = tokio::spawn(async move {
@@ -135,6 +157,10 @@ pub async fn handle_token(
                 Ok(())
             }
             Err(error) => {
+                pb.set_prefix(format!(
+                    "{}",
+                    style("FAILED").fg(console::Color::Red)
+                ));
                 pb.abandon_with_message(format!("{name}.{extension}: {error}"));
                 Err(eyre::eyre!("Error downloading image {}: {}", name, error))
             }

@@ -132,9 +132,9 @@ async fn resolve_ens_name(ens_name: &str, provider: Provider<Http>) -> Result<St
 fn pending(multi_pb: &MultiProgress, msg: String) -> ProgressBar {
     // https://github.com/sindresorhus/cli-spinners/blob/main/spinners.json
     let style = ProgressStyle::default_spinner()
-        .template("{spinner:.magenta} {prefix:.bold.blue} {msg}")
+        .template("{spinner:.green} {prefix:.bold.blue} {msg}")
         .unwrap()
-        .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶", "⣿"]);
+        .tick_strings(&["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶", "✔"]);
     let spinner = multi_pb.add(ProgressBar::new_spinner().with_style(style));
     spinner.set_prefix("INFO");
     spinner.set_message(msg);

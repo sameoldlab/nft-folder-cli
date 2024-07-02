@@ -187,15 +187,13 @@ pub async fn handle_processing(
     .flatten();
     tokio::pin!(requests);
 
-    let semaphore = Arc::new(Semaphore::new(max));
     let mp = MultiProgress::new();
-
     mp.set_alignment(indicatif::MultiProgressAlignment::Bottom);
     let total_pb = mp.add(ProgressBar::new(0));
-    total_pb.set_style(ProgressStyle::with_template(
-        "Found: {len:>3.bold.blue}  Saved: {pos:>3.bold.blue} {msg}",
-        )
-        .unwrap()
+    total_pb.set_style(
+        ProgressStyle::with_template("Found: {len:>3.bold.blue}  Saved: {pos:>3.bold.blue} {msg}")
+            .unwrap(),
+    );
 
     let semaphore = Arc::new(Semaphore::new(max));
     let mut errors: Vec<Report> = vec![];
