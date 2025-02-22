@@ -8,8 +8,6 @@ use ::core::time::Duration;
 use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 use console::style;
-use ethers::utils::hex::encode;
-use ethers_providers::{Http, Middleware, Provider};
 use eyre::Result;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use reqwest::Client;
@@ -46,41 +44,14 @@ struct CreateArgs {
     rpc: String,
 }
 
-struct Account {
-    name: Option<String>,
-    address: String,
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Create(args) => {
             let multi_pb = MultiProgress::new();
-            let provider = Provider::<Http>::try_from(args.rpc)?;
-            let account = match args.address {
-                arg if arg.split(".").last().unwrap() == "eth" => {
-                    let spinner =
-                        pending(&multi_pb, "ENS Detected. Resolving address...".to_string());
-                    let address = resolve_ens_name(&arg, provider).await?;
-                    spinner.finish_with_message(format!("Name Resolved to {address}"));
-                    Account {
-                        name: Some(arg.to_string()),
-                        address,
-                    }
-                }
-                arg if arg.starts_with("0x") => Account {
-                    name: None,
-                    address: arg.to_string(),
-                },
-                _ => {
-                    return Err(eyre::eyre!(
-                        "{} Supported formats are 0xabc12... or name.eth",
-                        style("Invalid address").red()
-                    ))
-                }
-            };
 
+            let account = args.address;
             let mut path = args
                 .path
                 .map(PathBuf::from)
@@ -88,10 +59,7 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|| PathBuf::from("."));
             path.push("nft-folder");
 
-            path = match account.name {
-                Some(name) => path.join(name),
-                None => path.join(&account.address),
-            };
+            path = path.join(&account);
 
             let spinner = pending(
                 &multi_pb,
@@ -108,7 +76,7 @@ async fn main() -> Result<()> {
             let client = Client::new();
             handle_processing(
                 &client,
-                account.address.as_str(),
+                account.as_str(),
                 path,
                 args.max_concurrent_downloads,
             )
@@ -121,11 +89,6 @@ async fn main() -> Result<()> {
             Ok(())
         }
     }
-}
-
-async fn resolve_ens_name(ens_name: &str, provider: Provider<Http>) -> Result<String> {
-    let address = provider.resolve_name(ens_name).await?;
-    Ok(format!("0x{}", encode(address)))
 }
 
 /// Wrapsa generic action with a spinner then return it's result
