@@ -1,190 +1,104 @@
 use crate::download::handle_token;
-use eyre::{eyre, Report, Result};
-use futures::{stream, StreamExt};
+use crate::simplehash::Nft;
+
+use dotenv::dotenv;
+use eyre::{Report, Result};
+use futures::{stream, Stream, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use reqwest::{Client, Response};
-use serde::{Deserialize, Serialize};
-use serde_json::to_value;
+use reqwest::{Client, StatusCode};
+use serde::Deserialize;
+use std::env;
 use std::{path::PathBuf, sync::Arc};
+use thiserror::Error;
 use tokio::{sync::Semaphore, task::JoinSet};
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(untagged)]
-#[serde(rename_all = "camelCase")]
-pub enum NftImage {
-    Null,
-    Url(String),
-    Object {
-        url: String,
-        size: Option<serde_json::Value>,
-        mime_type: Option<String>,
-    },
-}
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct NftToken {
-    pub image: NftImage,
-    pub name: Option<String>,
-    pub collection_name: Option<String>,
-    pub token_url: Option<String>,
-    pub token_id: Option<String>,
-    pub metadata: Option<serde_json::Value>,
-}
-#[derive(Serialize, Deserialize, Debug)]
-pub struct NftNode {
-    pub token: NftToken,
-}
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct PageInfo {
-    pub end_cursor: Option<String>,
-    pub has_next_page: bool,
-    limit: i32,
-}
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct NftNodes {
-    pub nodes: Vec<NftNode>,
-    pub page_info: PageInfo,
-}
-#[derive(Serialize, Deserialize, Debug)]
-pub struct NftData {
-    pub tokens: NftNodes,
-}
-#[derive(Deserialize, Serialize, Debug)]
-pub struct FailedRequest {
-    message: String,
-    locations: Vec<ErrorLocation>,
-    path: Vec<String>,
-}
-#[derive(Deserialize, Serialize, Debug)]
-struct ErrorLocation {
-    line: u64,
-    column: u64,
+#[derive(Error, Debug)]
+pub enum RequestError {
+    #[error("Request failed: {0}")]
+    ReqwestError(#[from] reqwest::Error),
+    #[error("API returned error: {status} - {message}")]
+    SimpleHashResponseError { status: StatusCode, message: String },
+    #[error("Environment variable not found: {0}")]
+    EnvError(#[from] std::env::VarError),
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ZoraRequest {
-    data: Option<NftData>,
-    error: Option<FailedRequest>,
+#[derive(Deserialize, Debug)]
+struct SHResponse {
+    next_cursor: Option<String>,
+    next: Option<String>,
+    previous: Option<String>,
+    nfts: Vec<Nft>,
+}
+#[derive(Clone)]
+struct SimpleHashClient {
+    client: Client,
+    api_key: String,
 }
 
-impl ZoraRequest {
-    const API: &'static str = "https://api.zora.co/graphql";
-
-    async fn send(
-        client: &Client,
+impl SimpleHashClient {
+    const BASE_URL: &'static str = "https://api.simplehash.com/v0";
+    pub fn new() -> Result<Self, RequestError> {
+        dotenv().ok();
+        let api_key = env::var("SIMPLEHASH_APIKEY")?;
+        Ok(Self {
+            client: Client::new(),
+            api_key,
+        })
+    }
+    pub async fn fetch_page(
+        self,
         cursor: Option<String>,
         address: &str,
-    ) -> Result<Response, reqwest::Error> {
-        let cursor = match cursor {
-            Some(c) => format!(r#", after: "{}""#, c),
-            None => "".to_owned(),
-        };
-
-        let query = format!(
-            r#"
-            query NFTsForAddress {{
-                tokens(networks: [{{network: ETHEREUM, chain: MAINNET}}],
-                    pagination: {{limit: 200 {} }},
-                    where: {{ownerAddresses: "{}"}}) {{
-                        nodes {{
-                            token {{
-                                tokenId
-                                    tokenUrl
-                                    collectionName
-                                    name
-                                    image {{
-                                        url
-                                        size
-                                        mimeType
-                                    }}
-                            }}
-                        }}
-                        pageInfo {{
-                            endCursor
-                            hasNextPage
-                            limit
-                        }}
-                    }}
-                }}
-            "#,
-            cursor, address
+    ) -> Result<SHResponse, RequestError> {
+        let mut url = format!(
+            "{}/nfts/owners_v2?chains=ethereum&wallet_addresses={}&limit=50",
+            SimpleHashClient::BASE_URL,
+            address
         );
-
-        let request_body = to_value(serde_json::json!({
-            "query": query,
-            "variables": null,
-        }))
-        .unwrap();
-
-        client
-            .post(ZoraRequest::API)
-            .json(&request_body)
+        if let Some(cursor) = cursor {
+            url.push_str(&format!("&cursor={}", cursor));
+        };
+        let response = self
+            .client
+            .get(url)
+            .header("X-API-KEY", self.api_key)
+            .header("Accept", "application/json")
             .send()
-            .await
-    }
-}
+            .await?;
 
-pub async fn fetch_page(
-    client: &Client,
-    cursor: Option<String>,
-    address: &str,
-) -> Result<Option<NftNodes>> {
-    let response = ZoraRequest::send(client, cursor, address)
-        .await
-        .map_err(|err| eyre!("Failed to send request: {}", err))?;
-    let mut response_body = response.bytes_stream();
-
-    let mut response_data = Vec::new();
-    while let Some(item) = StreamExt::next(&mut response_body).await {
-        let chunk = item.map_err(|err| eyre!("Failed to read response: {}", err))?;
-        response_data.extend_from_slice(&chunk);
-    }
-
-    let response_str = String::from_utf8(response_data)
-        .map_err(|err| eyre!("Failed to convert response to string: {}", err))?;
-
-    let response: ZoraRequest = serde_json::from_str(&response_str)
-        .map_err(|err| eyre!("Failed to parse JSON response: {}", err))?;
-
-    if let Some(data) = response.data {
-        Ok(Some(data.tokens))
-    } else if let Some(error) = response.error {
-        Err(eyre!("Errors: {:?}", error))
-    } else {
-        Ok(None)
-    }
-}
-
-pub async fn handle_processing(
-    client: &Client,
-    address: &str,
-    path: PathBuf,
-    max: usize,
-) -> eyre::Result<()> {
-    let cursor = None;
-    let requests = stream::unfold(cursor, move |cursor| async move {
-        match fetch_page(&client, cursor, address).await {
-            Ok(Some(response)) => {
-                if !response.nodes.is_empty() {
-                    let items = stream::iter(response.nodes.into_iter().map(|node| node.token));
-                    let next_cursor = response.page_info.end_cursor;
-                    // Max 30 requests per min to public Zora API, but doesn't kick in below 6000 (30*200) tokens
-                    // std::thread::sleep(std::time::Duration::from_millis(2000));
-                    Some((items, next_cursor))
-                } else {
-                    None
-                }
+        match response.status() {
+            StatusCode::OK => {
+                let api_response = response.json::<SHResponse>().await?;
+                Ok(api_response)
             }
-            Ok(None) => None,
-            Err(err) => {
-                println!("Error fetching data: {}", err);
-                None
+            status => {
+                let message = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string());
+
+                Err(RequestError::SimpleHashResponseError { status, message })
             }
         }
-    })
-    .flatten();
+    }
+    pub async fn stream_data(self, address: String) -> impl Stream<Item = Nft> {
+        stream::unfold(None, move |cursor| {
+            let address = address.clone();
+            let client = self.clone();
+            async move {
+                match client.fetch_page(cursor, &address).await {
+                    Ok(response) => Some((stream::iter(response.nfts), response.next_cursor)),
+                    Err(_) => None,
+                }
+            }
+        })
+        .flatten()
+    }
+}
+
+pub async fn handle_processing(address: &str, path: PathBuf, max: usize) -> eyre::Result<()> {
+    let sfc = SimpleHashClient::new()?;
+    let requests = sfc.stream_data(address.to_string()).await;
     tokio::pin!(requests);
 
     let mp = MultiProgress::new();
@@ -199,6 +113,7 @@ pub async fn handle_processing(
     let mut errors: Vec<Report> = vec![];
     let mut set = JoinSet::new();
 
+    let client = Client::new();
     while let Some(token) = requests.next().await {
         total_pb.inc_length(1);
         match handle_token(Arc::clone(&semaphore), token, &client, &mp, &path) {

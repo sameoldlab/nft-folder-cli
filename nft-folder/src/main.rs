@@ -1,5 +1,6 @@
 mod download;
 mod request;
+mod simplehash;
 
 use download::create_directory;
 use request::handle_processing;
@@ -10,7 +11,6 @@ use clap::{Args, Parser, Subcommand};
 use console::style;
 use eyre::Result;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use reqwest::Client;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -73,9 +73,7 @@ async fn main() -> Result<()> {
                 Err(err) => return Err(eyre::eyre!("{} {err}", style("Invalid Path").red())),
             };
 
-            let client = Client::new();
             handle_processing(
-                &client,
                 account.as_str(),
                 path,
                 args.max_concurrent_downloads,
