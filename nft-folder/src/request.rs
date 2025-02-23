@@ -1,9 +1,10 @@
 use crate::download::handle_token;
 use crate::simplehash::Nft;
 
+use async_stream::try_stream;
 use dotenv::dotenv;
 use eyre::{Report, Result};
-use futures::{stream, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
@@ -36,17 +37,24 @@ struct SimpleHashClient {
 }
 
 impl SimpleHashClient {
-    const BASE_URL: &'static str = "https://api.simplehash.com/v0";
-    pub fn new() -> Result<Self, RequestError> {
-        dotenv().ok();
-        let api_key = env::var("SIMPLEHASH_APIKEY")?;
-        Ok(Self {
-            client: Client::new(),
-            api_key,
-        })
+    const BASE_URL: &'static str = "https://api.simplehash.com/api/v0";
+    pub fn new(api_key: Option<&str>) -> Result<Self, RequestError> {
+        if let Some(api_key) = api_key {
+            Ok(Self {
+                client: Client::new(),
+                api_key: api_key.to_string(),
+            })
+        } else {
+            dotenv().ok();
+            Ok(Self {
+                client: Client::new(),
+                api_key: env::var("SIMPLEHASH_APIKEY")?,
+            })
+        }
+    }
     }
     pub async fn fetch_page(
-        self,
+        &self,
         cursor: Option<String>,
         address: &str,
     ) -> Result<SHResponse, RequestError> {
@@ -61,7 +69,7 @@ impl SimpleHashClient {
         let response = self
             .client
             .get(url)
-            .header("X-API-KEY", self.api_key)
+            .header("X-API-KEY", &self.api_key)
             .header("Accept", "application/json")
             .send()
             .await?;
@@ -81,24 +89,32 @@ impl SimpleHashClient {
             }
         }
     }
-    pub async fn stream_data(self, address: String) -> impl Stream<Item = Nft> {
-        stream::unfold(None, move |cursor| {
-            let address = address.clone();
-            let client = self.clone();
-            async move {
-                match client.fetch_page(cursor, &address).await {
-                    Ok(response) => Some((stream::iter(response.nfts), response.next_cursor)),
-                    Err(_) => None,
+    fn stream<'a>(
+        &'a self,
+        address: &'a str,
+    ) -> impl Stream<Item = Result<Nft, RequestError>> + use<'a> {
+         try_stream! {
+            let mut current_cursor = None;
+            loop {
+                let response = self.fetch_page(current_cursor, &address).await?;
+                for nft in response.nfts {
+                    yield nft;
+                }
+
+                match response.next_cursor {
+                    Some(cursor) =>  current_cursor = Some(cursor),
+                    None => break,
                 }
             }
-        })
-        .flatten()
+        }
     }
 }
 
 pub async fn handle_processing(address: &str, path: PathBuf, max: usize) -> eyre::Result<()> {
-    let sfc = SimpleHashClient::new()?;
-    let requests = sfc.stream_data(address.to_string()).await;
+    let sfc = SimpleHashClient::new(None)?;
+    // let requests = sfc.stream_data(address.to_string()).await;
+
+    let requests = sfc.stream(address);
     tokio::pin!(requests);
 
     let mp = MultiProgress::new();
@@ -116,12 +132,17 @@ pub async fn handle_processing(address: &str, path: PathBuf, max: usize) -> eyre
     let client = Client::new();
     while let Some(token) = requests.next().await {
         total_pb.inc_length(1);
-        match handle_token(Arc::clone(&semaphore), token, &client, &mp, &path) {
-            Ok(Some(task)) => {
-                set.spawn(task);
+        match token {
+            Ok(token) => {
+                match handle_token(Arc::clone(&semaphore), token, &client, &mp, &path) {
+                Ok(Some(task)) => {
+                    set.spawn(task);
+                }
+                Ok(None) => total_pb.inc(1),
+                Err(err) => errors.push(err),
             }
-            Ok(None) => total_pb.inc(1),
-            Err(err) => errors.push(err),
+        },
+            Err(err) => return Err(err.into())
         }
     }
 
