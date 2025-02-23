@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
@@ -13,18 +14,18 @@ pub struct Nft {
     pub nft_id: String,
     pub chain: String,
     pub contract_address: String,
-    pub token_id: String,
-    pub name: String,
-    pub description: String,
+    pub token_id: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
     pub previews: Previews,
     pub image_url: Option<String>,
     pub image_properties: Option<ImageProperties>,
     pub video_url: Option<String>,
-    pub video_properties: Option<String>,
+    pub video_properties: Option<VideoProperties>,
     pub audio_url: Option<String>,
-    pub audio_properties: Option<String>,
+    pub audio_properties: Option<AudioProperties>,
     pub model_url: Option<String>,
-    pub model_properties: Option<String>,
+    pub model_properties: Option<ModelProperties>,
     pub background_color: Option<String>,
     pub external_url: Option<String>,
     pub created_date: String,
@@ -34,7 +35,7 @@ pub struct Nft {
     pub owners: Vec<Owner>,
     pub contract: Contract,
     pub collection: Collection,
-    pub last_sale: Option<String>,
+    pub last_sale: Option<serde_json::Value>,
     pub first_created: FirstCreated,
     pub rarity: Rarity,
     pub royalty: Vec<serde_json::Value>,
@@ -60,6 +61,30 @@ pub struct ImageProperties {
 }
 
 #[derive(Deserialize, Debug)]
+pub struct VideoProperties  {
+    width:i32,
+    height:i32,
+    duration: f32,
+    video_coding: Option<String>,
+    audio_coding: String, // "h264"
+    size: i64,
+    mime_type: String//"video/mp4"
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AudioProperties  {
+    duration: f32,
+    audio_coding: String, // "mp3"
+    size: i64,
+    mime_type: String//"video/mp4"
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ModelProperties  {
+    unknown: bool
+}
+
+#[derive(Deserialize, Debug)]
 pub struct Owner {
     pub owner_address: String, // "0xfa6E0aDDF68267b8b6fF2dA55Ce01a53Fad6D8e2",
     pub quantity: i32,
@@ -70,19 +95,19 @@ pub struct Owner {
 #[derive(Deserialize, Debug)]
 pub struct Collection {
     pub collection_id: String,
-    pub name: String,
+    pub name: Option<String>,
     pub description: Option<String>,
     pub image_url: Option<String>,
     pub banner_image_url: Option<String>,
     pub category: Option<String>,
-    pub is_nsfw: Option<String>,
+    pub is_nsfw: bool,
     pub external_url: Option<String>,
     pub twitter_username: Option<String>,
     pub discord_url: Option<String>,
     pub instagram_username: Option<String>,
     pub medium_username: Option<String>,
     pub telegram_url: Option<String>,
-    pub marketplace_pages: Vec<String>,
+    pub marketplace_pages: Vec<serde_json::Value>,
     pub metaplex_mint: Option<String>,
     pub metaplex_first_verified_creator: Option<String>,
     pub floor_prices: Vec<serde_json::Value>,
@@ -98,7 +123,7 @@ pub struct Contract {
     pub name: String,
     pub symbol: String,
     pub deployed_by: String,
-    pub deployed_via_contract: String,
+    pub deployed_via_contract: Option<String>,
 }
 
 
@@ -114,9 +139,9 @@ pub struct FirstCreated {
 
 #[derive(Deserialize, Debug)]
 pub struct Rarity {
-    pub rank: i32,
-    pub score: i32,
-    pub unique_attributes: i32,
+    pub rank: Option<i32>,
+    pub score: Option<f32>,
+    pub unique_attributes: Option<i32>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -126,7 +151,7 @@ pub struct Metadata {
     //   value: String,
     //   display_type: Option<String>
     // -----------------------------
-    pub properties: serde_json::Value,
+    pub properties: Option<serde_json::Value>,
     // Creator: String
     // number: i64,
     // name: String
@@ -134,3 +159,34 @@ pub struct Metadata {
     pub animation_original_url: Option<String>,
     pub metadata_original_url: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_path_to_error::deserialize;
+    use serde_json::{self, Deserializer};
+
+    const SAMPLE_RESPONSE: &str = include_str!("./mock_response.json");
+
+    #[test]
+    fn resolve() {
+        let d = &mut Deserializer::from_str(SAMPLE_RESPONSE);
+        let result: Result<SHResponse, _> = deserialize(d);
+        match result {
+            Ok(_) => (),
+            Err(err) => {
+                let path = err.path().to_string();
+                let json_value: serde_json::Value = serde_json::from_str(SAMPLE_RESPONSE).unwrap();
+                let value_at_path = path.split('.')
+                    .fold(Some(&json_value), |acc, key| {
+                        acc.and_then(|v| v.get(key))
+                    });
+                
+                panic!("Parse error at path '{}': {}\nValue at path: {:?}", 
+                    path, err, value_at_path);
+            }
+        }
+        // assert!(result.is_ok(), "Failed to parse: {:?}", result.err())
+    }
+}
+
