@@ -1,6 +1,14 @@
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
+pub struct SHResponse {
+    pub next_cursor: Option<String>,
+    pub next: Option<String>,
+    pub previous: Option<String>,
+    pub nfts: Vec<Nft>,
+}
+
+#[derive(Deserialize, Debug)]
 pub struct Nft {
     pub nft_id: String,
     pub chain: String,

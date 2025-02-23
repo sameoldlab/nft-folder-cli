@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
             };
 
             handle_processing(
-                account.as_str(),
+                &account,
                 path,
                 args.max_concurrent_downloads,
             )

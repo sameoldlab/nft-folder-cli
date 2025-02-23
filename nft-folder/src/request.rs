@@ -1,5 +1,6 @@
+#![allow(dead_code)]
 use crate::download::handle_token;
-use crate::simplehash::Nft;
+use crate::simplehash::{Nft, SHResponse};
 
 use async_stream::try_stream;
 use dotenv::dotenv;
@@ -7,14 +8,13 @@ use eyre::{Report, Result};
 use futures::{Stream, StreamExt};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use reqwest::{Client, StatusCode};
-use serde::Deserialize;
 use std::env;
 use std::{path::PathBuf, sync::Arc};
 use thiserror::Error;
 use tokio::{sync::Semaphore, task::JoinSet};
 
 #[derive(Error, Debug)]
-pub enum RequestError {
+enum RequestError {
     #[error("Request failed: {0}")]
     ReqwestError(#[from] reqwest::Error),
     #[error("API returned error: {status} - {message}")]
@@ -23,99 +23,58 @@ pub enum RequestError {
     EnvError(#[from] std::env::VarError),
 }
 
-#[derive(Deserialize, Debug)]
-struct SHResponse {
-    next_cursor: Option<String>,
-    next: Option<String>,
-    previous: Option<String>,
-    nfts: Vec<Nft>,
-}
-#[derive(Clone)]
-struct SimpleHashClient {
-    client: Client,
-    api_key: String,
-}
 
-impl SimpleHashClient {
-    const BASE_URL: &'static str = "https://api.simplehash.com/api/v0";
-    pub fn new(api_key: Option<&str>) -> Result<Self, RequestError> {
-        if let Some(api_key) = api_key {
-            Ok(Self {
-                client: Client::new(),
-                api_key: api_key.to_string(),
-            })
+fn query_address<'a>(
+    address: &'a str,
+    api_key: Option<&'a str>,
+) -> impl Stream<Item = Result<Nft, RequestError>> + use<'a> {
+    let client = Client::new();
+
+    try_stream! {
+        let api_key = if let Some(api_key) = api_key {
+            api_key.to_string()
         } else {
             dotenv().ok();
-            Ok(Self {
-                client: Client::new(),
-                api_key: env::var("SIMPLEHASH_APIKEY")?,
-            })
-        }
-    }
-    }
-    pub async fn fetch_page(
-        &self,
-        cursor: Option<String>,
-        address: &str,
-    ) -> Result<SHResponse, RequestError> {
+            env::var("SIMPLEHASH_APIKEY")?
+        };
         let mut url = format!(
-            "{}/nfts/owners_v2?chains=ethereum&wallet_addresses={}&limit=50",
-            SimpleHashClient::BASE_URL,
+            "https://api.simplehash.com/api/v0/nfts/owners_v2?chains=ethereum&wallet_addresses={}&limit=50",
             address
         );
-        if let Some(cursor) = cursor {
-            url.push_str(&format!("&cursor={}", cursor));
-        };
-        let response = self
-            .client
-            .get(url)
-            .header("X-API-KEY", &self.api_key)
-            .header("Accept", "application/json")
-            .send()
-            .await?;
+        loop {
+            let request = client
+                .get(url)
+                .header("X-API-KEY", &api_key)
+                .header("Accept", "application/json")
+                .send()
+                .await?;
 
-        match response.status() {
-            StatusCode::OK => {
-                let api_response = response.json::<SHResponse>().await?;
-                Ok(api_response)
-            }
-            status => {
-                let message = response
+            let status = request.status();
+            if !status.is_success() {
+                let message = request
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
 
-                Err(RequestError::SimpleHashResponseError { status, message })
+                Err(RequestError::SimpleHashResponseError { status, message })?;
+                break
             }
-        }
-    }
-    fn stream<'a>(
-        &'a self,
-        address: &'a str,
-    ) -> impl Stream<Item = Result<Nft, RequestError>> + use<'a> {
-         try_stream! {
-            let mut current_cursor = None;
-            loop {
-                let response = self.fetch_page(current_cursor, &address).await?;
-                for nft in response.nfts {
-                    yield nft;
-                }
+            let response = request.json::<SHResponse>().await?;
+            for nft in response.nfts {
+                yield nft;
+            }
 
-                match response.next_cursor {
-                    Some(cursor) =>  current_cursor = Some(cursor),
-                    None => break,
-                }
-            }
+            match response.next {
+                Some(next) =>  url = next,
+                None => break,
+            };
         }
     }
 }
 
 pub async fn handle_processing(address: &str, path: PathBuf, max: usize) -> eyre::Result<()> {
-    let sfc = SimpleHashClient::new(None)?;
-    // let requests = sfc.stream_data(address.to_string()).await;
-
-    let requests = sfc.stream(address);
-    tokio::pin!(requests);
+    let tokens = query_address(address, None);
+    tokio::pin!(tokens);
 
     let mp = MultiProgress::new();
     mp.set_alignment(indicatif::MultiProgressAlignment::Bottom);
@@ -130,19 +89,17 @@ pub async fn handle_processing(address: &str, path: PathBuf, max: usize) -> eyre
     let mut set = JoinSet::new();
 
     let client = Client::new();
-    while let Some(token) = requests.next().await {
+    while let Some(token) = tokens.next().await {
         total_pb.inc_length(1);
         match token {
-            Ok(token) => {
-                match handle_token(Arc::clone(&semaphore), token, &client, &mp, &path) {
+            Ok(token) => match handle_token(Arc::clone(&semaphore), token, &client, &mp, &path) {
                 Ok(Some(task)) => {
                     set.spawn(task);
                 }
                 Ok(None) => total_pb.inc(1),
                 Err(err) => errors.push(err),
-            }
-        },
-            Err(err) => return Err(err.into())
+            },
+            Err(err) => return Err(err.into()),
         }
     }
 
