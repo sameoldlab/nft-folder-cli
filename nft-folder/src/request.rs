@@ -1,20 +1,16 @@
 #![allow(dead_code)]
-use crate::download::handle_token;
-use crate::simplehash::{Nft, SHResponse};
 
+use crate::simplehash::{Nft, SHResponse};
+use eyre::Result;
 use async_stream::try_stream;
 use dotenv::dotenv;
-use eyre::{Report, Result};
-use futures::{Stream, StreamExt};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use futures::Stream;
 use reqwest::{Client, StatusCode};
-use std::env;
-use std::{path::PathBuf, sync::Arc};
 use thiserror::Error;
-use tokio::{sync::Semaphore, task::JoinSet};
+use std::env;
 
 #[derive(Error, Debug)]
-enum RequestError {
+pub enum RequestError {
     #[error("Request failed: {0}")]
     ReqwestError(#[from] reqwest::Error),
     #[error("API returned error: {status} - {message}")]
@@ -24,7 +20,7 @@ enum RequestError {
 }
 
 
-fn query_address<'a>(
+pub fn query_address<'a>(
     address: &'a str,
     api_key: Option<&'a str>,
 ) -> impl Stream<Item = Result<Nft, RequestError>> + use<'a> {
@@ -70,57 +66,4 @@ fn query_address<'a>(
             };
         }
     }
-}
-
-pub async fn handle_processing(address: &str, path: PathBuf, max: usize) -> eyre::Result<()> {
-    let tokens = query_address(address, None);
-    tokio::pin!(tokens);
-
-    let mp = MultiProgress::new();
-    mp.set_alignment(indicatif::MultiProgressAlignment::Bottom);
-    let total_pb = mp.add(ProgressBar::new(0));
-    total_pb.set_style(
-        ProgressStyle::with_template("Found: {len:>3.bold.blue}  Saved: {pos:>3.bold.blue} {msg}")
-            .unwrap(),
-    );
-
-    let semaphore = Arc::new(Semaphore::new(max));
-    let mut errors: Vec<Report> = vec![];
-    let mut set = JoinSet::new();
-
-    let client = Client::new();
-    while let Some(token) = tokens.next().await {
-        total_pb.inc_length(1);
-        match token {
-            Ok(token) => match handle_token(Arc::clone(&semaphore), token, &client, &mp, &path) {
-                Ok(Some(task)) => {
-                    set.spawn(task);
-                }
-                Ok(None) => total_pb.inc(1),
-                Err(err) => errors.push(err),
-            },
-            Err(err) => return Err(err.into()),
-        }
-    }
-
-    while let Some(tasks) = set.join_next().await {
-        let tasks = tasks.unwrap();
-        match tasks.unwrap() {
-            Ok(_) => {
-                total_pb.inc(1);
-            }
-            Err(err) => {
-                errors.push(err);
-            }
-        }
-    }
-
-    if errors.is_empty() {
-        total_pb.finish_with_message("Completed all sucessfully");
-    } else {
-        total_pb.abandon();
-        errors.iter().for_each(|e| println!("{}", e))
-    }
-
-    Ok(())
 }
